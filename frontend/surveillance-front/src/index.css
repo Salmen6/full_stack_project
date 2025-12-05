@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* optional global styles */
+body {
+  @apply bg-slate-50 font-sans;
+}
+@keyframes blue-glow {
+  0%, 100% {
+    box-shadow: 0 0 6px rgba(59, 130, 246, 0.3); /* soft blue */
+  }
+  50% {
+    box-shadow: 0 0 12px rgba(59, 130, 246, 0.5);
+  }
+}
+
+.animate-blue-glow {
+  animation: blue-glow 2.5s ease-in-out infinite;
+}
+/* Hide scrollbar for all browsers */
+.scrollbar-hide {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;     /* Firefox */
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;             /* Chrome, Safari, Opera */
+}
