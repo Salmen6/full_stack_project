@@ -1,22 +1,31 @@
+# ======================
 # Java / Spring Boot
+# ======================
 /backend/target/
 /backend/.idea/
 /backend/*.iml
 /backend/.classpath
 /backend/.project
 /backend/.settings/
-
-# Node / React
-/frontend/node_modules/
-/frontend/build/
-/frontend/.env
-/frontend/.vscode/
+/backend/.metadata/
 
 # Eclipse workspace
-backend/.metadata/
 *.log
 *.snap
 *.index
 *.prefs
 
+# ======================
+# Node / React
+# ======================
+# Ignore everything inside frontend/surveillance-front except src, public, package.json, package-lock.json
+/frontend/surveillance-front/*
+!/frontend/surveillance-front/src/
+!/frontend/surveillance-front/public/
+!/frontend/surveillance-front/package.json
+!/frontend/surveillance-front/package-lock.json
 
+# Optional: ignore editor configs
+/frontend/surveillance-front/.vscode/
+/frontend/surveillance-front/.env
+/frontend/surveillance-front/build/
