@@ -11,4 +11,12 @@
 /frontend/build/
 /frontend/.env
 /frontend/.vscode/
- 
+
+# Eclipse workspace
+backend/.metadata/
+*.log
+*.snap
+*.index
+*.prefs
+
+
