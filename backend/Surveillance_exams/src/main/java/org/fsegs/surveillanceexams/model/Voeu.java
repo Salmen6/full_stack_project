@@ -23,4 +23,14 @@ public class Voeu {
 
     @Column(name = "date_soumission")
     private LocalDateTime dateSoumission = LocalDateTime.now();
+    
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status")
+    private VoeuStatus status = VoeuStatus.PENDING;
+    
+    public enum VoeuStatus {
+        PENDING,
+        APPROVED,
+        REJECTED
+    }
 }

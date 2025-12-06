@@ -1,29 +1,32 @@
 // src/services/ExamService.js
-import api from '../api/axios'; // your axios instance
+import api from '../api/axios';
 
 const ExamService = {
   // ---- Backend calls ----
   getAllSeances: () => api.get('/seances'),
-  getSeances: () => api.get('/seances'), // alias used by teacher page
+  getSeances: () => api.get('/seances'),
   getAllEnseignants: () => api.get('/enseignants'),
   getAllVoeux: () => api.get('/voeux'),
   getEnseignantByUserId: (idUser) => api.get(`/enseignants/by-user/${idUser}`),
   calculateSeanceNeeds: (id) => api.post(`/seances/${id}/calculate-needs`),
   calculateEnseignantLoad: (id) => api.post(`/enseignants/${id}/calculate-load`),
-  submitVoeu: (idEnseignant, idSeance) => api.post('/voeux', null, { params: { idEnseignant, idSeance } }),
-  assignSurveillant: (idEnseignant, idSeance) => api.post('/affectation', null, { params: { idEnseignant, idSeance } }),
+
+  // Updated to handle new response format
+  submitVoeu: (idEnseignant, idSeance) =>
+    api.post('/voeux', null, { params: { idEnseignant, idSeance } }),
+
+  assignSurveillant: (idEnseignant, idSeance) =>
+    api.post('/affectation', null, { params: { idEnseignant, idSeance } }),
+
   login: async (loginStr, password) => {
     const res = await api.post('/login', { login: loginStr, password });
-    // normalize backend LoginResponse -> frontend user object expected by components
     const data = res.data || {};
-    // backend returns idUser, login, role, redirect, enseignant (DTO)
     const user = {
       id_user: data.idUser ?? data.id_user ?? null,
       login: data.login ?? null,
       role: (data.role && data.role.name) ? data.role.name : data.role || null,
       redirect: data.redirect || null,
       enseignantDTO: data.enseignant || null,
-      // pick some useful fields for display
       nomComplet: data.enseignant?.nomComplet || null
     };
     return user;
@@ -33,66 +36,102 @@ const ExamService = {
 
   /**
    * Returns true if the teacher teaches any matiere included in the given seance.
-   * Accepts:
-   *  - teacher: either an EnseignantDTO (teacherData from backend) or a full Enseignant (from /enseignants)
-   *  - seance: seance object as returned by /seances (with epreuves and matiere info)
+   * 
+   * This function checks for conflicts of interest by comparing:
+   * 1. The subjects (matieres) that the teacher teaches
+   * 2. The subjects tested in the exam session (from epreuves)
+   * 
+   * If there's any match, the teacher cannot supervise that session.
+   * 
+   * @param {Object} teacher - Teacher data object containing matieres
+   * @param {Object} seance - Session data object containing epreuves
+   * @returns {boolean} - True if teacher teaches any subject in the session
    */
   subjectConflict: (teacher, seance) => {
     if (!teacher || !seance) return false;
 
-    // teacher.matieres may be in different shapes. Try to collect IDs or names.
-    const teacherMatieres = new Set();
+    // Build a Set of teacher's subject IDs and names for efficient lookup
+    const teacherSubjects = new Set();
+    
+    // Extract from teacher.matieres (direct field)
     if (teacher.matieres && Array.isArray(teacher.matieres)) {
       teacher.matieres.forEach(m => {
-        if (m.id) teacherMatieres.add(m.id);
-        else if (m.nom) teacherMatieres.add(m.nom);
+        if (m.id) teacherSubjects.add(`id:${m.id}`);
+        if (m.nom) teacherSubjects.add(`nom:${m.nom.toLowerCase()}`);
       });
     }
-    // Sometimes teacherDTO contains affectations only; if no matieres provided, try enseignantDTO.matieres etc.
-    if (teacher.matieres == null && teacher.enseignantDTO && teacher.enseignantDTO.matieres) {
-      teacher.enseignantDTO.matieres.forEach(m => teacherMatieres.add(m.id || m.nom));
+    
+    // Fallback: check enseignantDTO.matieres if available
+    if (teacher.matieres == null && teacher.enseignantDTO?.matieres) {
+      teacher.enseignantDTO.matieres.forEach(m => {
+        if (m.id) teacherSubjects.add(`id:${m.id}`);
+        if (m.nom) teacherSubjects.add(`nom:${m.nom.toLowerCase()}`);
+      });
     }
 
-    // get matieres from seance
-    const matieresInSeance = (seance.epreuves || []).map(e => {
-      if (e.matiere) return e.matiere.id ?? e.matiere.nom;
-      if (e.matiere_nom) return e.matiere_nom;
-      if (e.nom) return e.nom;
-      return null;
-    }).filter(Boolean);
-
-    // If teacher's matieres is empty, we can't detect a conflict on frontend; be conservative: false
-    if (teacherMatieres.size === 0) {
-      // Not enough data on frontend: assume no conflict (server will enforce)
+    // If teacher has no subjects defined, no conflict
+    if (teacherSubjects.size === 0) {
       return false;
     }
 
-    // check any intersection
-    return matieresInSeance.some(m => teacherMatieres.has(m));
+    // Extract subjects from session's epreuves
+    const epreuves = seance.epreuves || [];
+    
+    for (const epreuve of epreuves) {
+      // Check matiere object
+      if (epreuve.matiere) {
+        if (epreuve.matiere.id && teacherSubjects.has(`id:${epreuve.matiere.id}`)) {
+          return true;
+        }
+        if (epreuve.matiere.nom && teacherSubjects.has(`nom:${epreuve.matiere.nom.toLowerCase()}`)) {
+          return true;
+        }
+      }
+      
+      // Fallback: check nom field directly (sometimes used as matiere name)
+      if (epreuve.nom && teacherSubjects.has(`nom:${epreuve.nom.toLowerCase()}`)) {
+        return true;
+      }
+      
+      // Additional fallback for matiere_nom
+      if (epreuve.matiere_nom && teacherSubjects.has(`nom:${epreuve.matiere_nom.toLowerCase()}`)) {
+        return true;
+      }
+    }
+
+    return false;
   },
 
   /**
    * Returns true if the teacher already has an assignment at the same date and start time.
-   * Expects teacher to include `affectations` or similar with seance (or a list of assigned seances).
-   *
-   * Rule: conflict if same date (YYYY-MM-DD) AND same heureDebut.
+   * 
+   * Teachers cannot be assigned to multiple sessions at the same time slot.
+   * 
+   * @param {Object} teacher - Teacher data with affectations
+   * @param {Object} seance - Target session to check
+   * @returns {boolean} - True if there's a time conflict
    */
   timeOverlap: (teacher, seance) => {
     if (!teacher || !seance) return false;
 
+    // Extract target session's date and time
     const targetDate = seance.date ?? seance.date_seance ?? seance.dateSeance;
-    const targetStart = seance.heureDebut ?? seance.heure_debut ?? seance.start ?? seance.heureDebut;
+    const targetStart = seance.heureDebut ?? seance.heure_debut ?? seance.start;
 
     if (!targetDate || !targetStart) return false;
 
-    const affectations = teacher.affectations || teacher.affectations || teacher.enseignantDTO?.affectations || [];
+    // Get teacher's existing affectations
+    const affectations = teacher.affectations || teacher.enseignantDTO?.affectations || [];
     if (!Array.isArray(affectations) || affectations.length === 0) return false;
 
+    // Check each affectation for time overlap
     return affectations.some(a => {
       const s = a.seance || a;
-      const d = s.date ?? s.date_seance ?? s.dateSeance;
-      const start = s.heureDebut ?? s.heure_debut ?? s.start;
-      return d === targetDate && start === targetStart;
+      const affDate = s.date ?? s.date_seance ?? s.dateSeance;
+      const affStart = s.heureDebut ?? s.heure_debut ?? s.start;
+      
+      // Time overlap exists if date and start time match
+      return affDate === targetDate && affStart === targetStart;
     });
   }
 };

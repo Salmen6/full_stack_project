@@ -8,10 +8,13 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
 
 @RestController
 @RequestMapping("/api")
 @RequiredArgsConstructor
+@CrossOrigin(origins = "http://localhost:3000")
 public class ExamController {
 
     private final SurveillanceService service;
@@ -53,15 +56,32 @@ public class ExamController {
     }
 
     // =========================
-    // VOEUX (WISHES)
+    // VOEUX (WISHES) - Updated with detailed response
     // =========================
     @PostMapping("/voeux")
-    public ResponseEntity<String> submitVoeu(@RequestParam Long idEnseignant, @RequestParam Long idSeance) {
-        String result = service.soumettreVoeu(idEnseignant, idSeance);
-        if (result.contains("saturated") || result.contains("already")) {
-            return ResponseEntity.badRequest().body(result);
+    public ResponseEntity<Map<String, Object>> submitVoeu(
+            @RequestParam Long idEnseignant, 
+            @RequestParam Long idSeance) {
+        try {
+            String result = service.soumettreVoeu(idEnseignant, idSeance);
+            
+            Map<String, Object> response = new HashMap<>();
+            boolean success = result.contains("successfully");
+            
+            response.put("success", success);
+            response.put("message", result);
+            
+            if (success) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.badRequest().body(response);
+            }
+        } catch (Exception e) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", false);
+            response.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(response);
         }
-        return ResponseEntity.ok(result);
     }
 
     @GetMapping("/voeux")
@@ -73,7 +93,9 @@ public class ExamController {
     // AFFECTATION (ASSIGNMENT)
     // =========================
     @PostMapping("/affectation")
-    public ResponseEntity<String> assignTeacher(@RequestParam Long idEnseignant, @RequestParam Long idSeance) {
+    public ResponseEntity<String> assignTeacher(
+            @RequestParam Long idEnseignant, 
+            @RequestParam Long idSeance) {
         String result = service.affecterSurveillant(idSeance, idEnseignant);
         if (result.equals("Assignment successful")) {
             return ResponseEntity.ok(result);
