@@ -150,28 +150,14 @@ const TeacherDashboard = () => {
     }
   };
 
-  /**
-   * Determines the status of a session for the current teacher
-   * 
-   * Priority order: 
-   * 1. assigned → Already assigned (green)
-   * 2. subject_conflict → Teacher teaches this subject (red)
-   * 3. survey_conflict → Conflicts with teacher's taught session at same time (red)
-   * 4. quota → Quota reached (rose)
-   * 5. overlap → Time conflict with existing assignment (rose)
-   * 6. full → Session full (gray)
-   * 7. open → Available (indigo)
-   */
   const getSessionStatus = (s) => {
     if (!teacherData) return { status: 'loading', label: 'Loading...', reason: '' };
 
-    // Check if already assigned
     const alreadyAssigned = teacherData.affectations?.some(a => a.seance.id === s.id);
     if (alreadyAssigned) {
       return { status: 'assigned', label: 'Already Assigned', reason: 'You are already assigned to this session' };
     }
 
-    // CRITICAL: Check if teacher teaches this subject (subject conflict)
     if (ExamService.subjectConflict(teacherData, s)) {
       return { 
         status: 'subject_conflict', 
@@ -180,8 +166,6 @@ const TeacherDashboard = () => {
       };
     }
 
-    // NEW: Check for survey conflict
-    // Teacher cannot survey sessions that conflict with sessions where they teach
     if (ExamService.surveyConflict(teacherData, s, seances)) {
       return {
         status: 'survey_conflict',
@@ -190,19 +174,16 @@ const TeacherDashboard = () => {
       };
     }
 
-    // Check quota
     const currentAssignments = teacherData.affectations?.length || 0;
     const maxAssignments = teacherData.chargeSurveillance || 0;
     if (currentAssignments >= maxAssignments) {
       return { status: 'quota', label: 'Quota Reached', reason: 'You have reached your surveillance quota' };
     }
 
-    // Check time overlap with existing assignments
     if (ExamService.timeOverlap(teacherData, s)) {
       return { status: 'overlap', label: 'Time Conflict', reason: 'You have another assignment at this time' };
     }
 
-    // Check if full
     const ins = s.nbSurveillantsInscrits ?? 0;
     const need = s.nbSurveillantsNecessaires ?? 0;
     if (ins >= need) {
@@ -213,39 +194,55 @@ const TeacherDashboard = () => {
   };
 
   /**
-   * Calculate date range: from ACTUAL first session to ACTUAL last session
-   * Exclude Sundays from the display
+   * FIXED: Calculate date range correctly
    * 
-   * FIXED: Now correctly finds min and max dates across ALL sessions,
-   * regardless of gaps in the data
+   * Key changes:
+   * 1. Parse dates and find TRUE min/max across ALL sessions
+   * 2. Generate ALL dates between min and max (inclusive)
+   * 3. Exclude Sundays from the display
+   * 
+   * This ensures gaps in session dates don't truncate the calendar
    */
   const calendarDates = useMemo(() => {
     if (seances.length === 0) return [];
     
-    // Extract all valid dates from sessions and parse them as Date objects
+    // Extract and parse all session dates
     const sessionDates = seances
-      .map(s => s.date || s.date_seance)
-      .filter(Boolean)
-      .map(dateStr => new Date(dateStr));
+      .map(s => {
+        const dateStr = s.date || s.date_seance || s.dateSeance;
+        if (!dateStr) return null;
+        
+        // Parse the date string (format: YYYY-MM-DD)
+        const date = new Date(dateStr + 'T00:00:00'); // Force local timezone
+        return date;
+      })
+      .filter(d => d && !isNaN(d.getTime())); // Filter out invalid dates
     
     if (sessionDates.length === 0) return [];
     
-    // Find ACTUAL minimum and maximum dates using timestamps
-    const minTimestamp = Math.min(...sessionDates.map(d => d.getTime()));
-    const maxTimestamp = Math.max(...sessionDates.map(d => d.getTime()));
+    // Find ABSOLUTE minimum and maximum dates
+    let minDate = sessionDates[0];
+    let maxDate = sessionDates[0];
     
-    const firstDate = new Date(minTimestamp);
-    const lastDate = new Date(maxTimestamp);
+    sessionDates.forEach(date => {
+      if (date < minDate) minDate = date;
+      if (date > maxDate) maxDate = date;
+    });
     
-    // Generate ALL dates between first and last (inclusive), excluding Sundays
+    // Generate ALL dates between min and max (inclusive), excluding Sundays
     const dateRange = [];
-    const currentDate = new Date(firstDate);
+    const currentDate = new Date(minDate);
     
-    while (currentDate <= lastDate) {
-      // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+    while (currentDate <= maxDate) {
+      // 0 = Sunday, skip it
       if (currentDate.getDay() !== 0) {
-        dateRange.push(currentDate.toISOString().split('T')[0]);
+        // Format as YYYY-MM-DD
+        const year = currentDate.getFullYear();
+        const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+        const day = String(currentDate.getDate()).padStart(2, '0');
+        dateRange.push(`${year}-${month}-${day}`);
       }
+      // Move to next day
       currentDate.setDate(currentDate.getDate() + 1);
     }
     
@@ -271,42 +268,36 @@ const TeacherDashboard = () => {
     let textColor = "text-slate-900";
     let Icon = null;
 
-    // Style for assigned sessions (green)
     if (status === 'assigned') {
       cardClass += "bg-emerald-50 border-emerald-300 shadow-emerald-100";
       btnClass += "bg-emerald-200 border-emerald-300 text-emerald-800 cursor-default";
       textColor = "text-emerald-900";
       Icon = Check;
     } 
-    // Style for subject conflict sessions (distinctive red/orange)
     else if (status === 'subject_conflict') {
       cardClass += "bg-red-50 border-red-400 shadow-red-100 opacity-90";
       btnClass += "bg-red-200 border-red-400 text-red-800 cursor-not-allowed";
       textColor = "text-red-900";
       Icon = Lock;
     }
-    // NEW: Style for survey conflict sessions (same red as subject conflict)
     else if (status === 'survey_conflict') {
       cardClass += "bg-red-50 border-red-400 shadow-red-100 opacity-90";
       btnClass += "bg-red-200 border-red-400 text-red-800 cursor-not-allowed";
       textColor = "text-red-900";
       Icon = Lock;
     }
-    // Style for other locked sessions (overlap, quota)
     else if (status === 'overlap' || status === 'quota') {
       cardClass += "bg-rose-50 border-rose-300 shadow-rose-100 opacity-75";
       btnClass += "bg-rose-100 border-rose-300 text-rose-700 cursor-not-allowed";
       textColor = "text-rose-900";
       Icon = Lock;
     } 
-    // Style for full sessions
     else if (status === 'full') {
       cardClass += "bg-slate-100 border-slate-300 shadow-slate-100 opacity-75";
       btnClass += "bg-slate-200 border-slate-300 text-slate-600 cursor-not-allowed";
       textColor = "text-slate-800";
       Icon = Users;
     } 
-    // Style for available sessions
     else {
       cardClass += "bg-white border-indigo-200 shadow-indigo-100 hover:shadow-xl hover:scale-[1.02]";
       btnClass += "bg-gradient-to-r from-indigo-500 to-purple-500 text-white border-indigo-400 hover:from-indigo-600 hover:to-purple-600";
@@ -315,7 +306,6 @@ const TeacherDashboard = () => {
 
     return (
       <div className={cardClass}>
-        {/* Lock icon for all locked sessions */}
         {(status === 'subject_conflict' || status === 'survey_conflict' || status === 'overlap' || status === 'quota') && (
           <div className="absolute top-2 right-2">
             <Lock className={status === 'subject_conflict' || status === 'survey_conflict' ? 'text-red-600' : 'text-rose-500'} size={20} />
@@ -383,7 +373,6 @@ const TeacherDashboard = () => {
       
       <div className="relative z-10 p-6 lg:p-10">
         
-        {/* Header */}
         <header className="mb-10 flex flex-col gap-6 rounded-2xl border border-indigo-200 bg-white p-8 shadow-xl md:flex-row md:justify-between md:items-end">
           <div>
             <h1 className="text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-slate-900 via-indigo-900 to-purple-900">
@@ -427,14 +416,28 @@ const TeacherDashboard = () => {
           </div>
 
           <div className="lg:col-span-9">
-            <div className="rounded-2xl border border-indigo-200 bg-white shadow-xl overflow-hidden">
+            <div className="rounded-2xl border border-indigo-200 bg-white shadow-xl overflow-hidden relative">
+              
+              {/* Scroll indicator - shown when content overflows */}
+              {!isLoading && calendarDates.length > 5 && (
+                <div className="absolute right-0 top-1/2 -translate-y-1/2 z-40 bg-gradient-to-l from-indigo-600 to-transparent w-16 h-full pointer-events-none flex items-center justify-end pr-4">
+                  <div className="animate-bounce text-white text-2xl">→</div>
+                </div>
+              )}
 
               <div className="flex items-center justify-between border-b border-indigo-100 bg-gradient-to-r from-indigo-50 to-purple-50 p-7">
                 <div className="flex items-center gap-4">
                   <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-400 to-purple-400 shadow-lg">
                     <span className="text-2xl">🗓</span>
                   </div>
-                  <span className="text-xl font-bold text-slate-900">Session Calendar</span>
+                  <div>
+                    <span className="text-xl font-bold text-slate-900">Session Calendar</span>
+                    {calendarDates.length > 0 && (
+                      <p className="text-xs text-slate-600 mt-1">
+                        Showing {calendarDates.length} days • Scroll horizontally →
+                      </p>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -446,11 +449,16 @@ const TeacherDashboard = () => {
                   </div>
                 </div>
               ) : (
-                <div className="overflow-x-auto pb-2">
-                  <div className="min-w-[1000px] p-6">
+                <div className="overflow-x-auto pb-2 scrollbar-hide relative" style={{ scrollBehavior: 'smooth' }}>
+                  {/* Left shadow gradient when scrolled */}
+                  <div className="absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-white to-transparent pointer-events-none z-10"></div>
+                  {/* Right shadow gradient */}
+                  <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-white to-transparent pointer-events-none z-10"></div>
+                  
+                  <div className="p-6" style={{ minWidth: `${90 + (calendarDates.length * 170)}px` }}>
                     <div
                       className="grid gap-[2px] rounded-2xl border border-indigo-200 bg-indigo-50 shadow-inner overflow-hidden"
-                      style={{ gridTemplateColumns: `90px repeat(${calendarDates.length}, minmax(170px, 1fr))` }}
+                      style={{ gridTemplateColumns: `90px repeat(${calendarDates.length}, 170px)` }}
                     >
                       
                       <div className="sticky left-0 z-30 flex items-center justify-center bg-gradient-to-br from-indigo-700 to-purple-700 p-4 text-xs font-black uppercase tracking-widest text-white shadow-lg">
@@ -460,10 +468,10 @@ const TeacherDashboard = () => {
                       {calendarDates.map(date => (
                         <div key={date} className="flex flex-col items-center justify-center bg-white p-4 border-r border-indigo-100">
                           <div className="text-[11px] font-black uppercase tracking-widest text-indigo-600">
-                            {new Date(date).toLocaleDateString('en-US', { weekday: 'short' })}
+                            {new Date(date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' })}
                           </div>
                           <div className="mt-1.5 text-lg font-black text-slate-900">
-                            {new Date(date).getDate()}
+                            {new Date(date + 'T00:00:00').getDate()}
                           </div>
                         </div>
                       ))}

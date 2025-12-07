@@ -3,8 +3,30 @@ import api from '../api/axios';
 
 const ExamService = {
   // ---- Backend calls ----
-  getAllSeances: () => api.get('/seances'),
-  getSeances: () => api.get('/seances'),
+  
+  /**
+   * Get seances with optional query parameters
+   * Supports pagination and filtering
+   * @param {Object} params - Optional query parameters (e.g., { all: true, page: 0, size: 100 })
+   * @returns {Promise} - Axios response with seances data
+   */
+  getSeances: (params = {}) => {
+    // If 'all' flag is set, use a very large size to attempt fetching all records
+    if (params.all === true) {
+      return api.get('/seances', { params: { size: 10000 } });
+    }
+    return api.get('/seances', { params });
+  },
+
+  /**
+   * Get ALL seances without pagination
+   * Internally calls getSeances with all flag
+   * @returns {Promise} - Axios response with all seances
+   */
+  getAllSeances: () => {
+    return ExamService.getSeances({ all: true });
+  },
+
   getAllEnseignants: () => api.get('/enseignants'),
   getAllVoeux: () => api.get('/voeux'),
   getEnseignantByUserId: (idUser) => api.get(`/enseignants/by-user/${idUser}`),
@@ -30,6 +52,76 @@ const ExamService = {
       nomComplet: data.enseignant?.nomComplet || null
     };
     return user;
+  },
+
+  /**
+   * Fetch all seances with automatic pagination handling
+   * Attempts multiple strategies to get complete dataset:
+   * 1. Request with large size parameter
+   * 2. Check if response is paginated and fetch remaining pages
+   * 3. Fallback to multiple requests if needed
+   * 
+   * @returns {Promise<Array>} - Complete array of all seances
+   */
+  fetchAllSeances: async () => {
+    try {
+      // Strategy 1: Try to get all with large size parameter
+      const response = await api.get('/seances', { params: { size: 10000 } });
+      
+      // Check if response is paginated (Spring Boot Page format)
+      if (response.data && typeof response.data === 'object' && 'content' in response.data) {
+        // Paginated response
+        let allSeances = [...response.data.content];
+        const totalPages = response.data.totalPages || 1;
+        const currentPage = response.data.number || 0;
+        
+        // If there are more pages, fetch them
+        if (totalPages > 1) {
+          const pagePromises = [];
+          for (let page = currentPage + 1; page < totalPages; page++) {
+            pagePromises.push(
+              api.get('/seances', { params: { page, size: response.data.size || 20 } })
+            );
+          }
+          
+          const remainingPages = await Promise.all(pagePromises);
+          remainingPages.forEach(pageResponse => {
+            if (pageResponse.data && pageResponse.data.content) {
+              allSeances = allSeances.concat(pageResponse.data.content);
+            }
+          });
+        }
+        
+        return allSeances;
+      }
+      
+      // Non-paginated response (array)
+      if (Array.isArray(response.data)) {
+        return response.data;
+      }
+      
+      // Fallback: return empty array if format is unexpected
+      console.warn('Unexpected seances response format:', response.data);
+      return [];
+      
+    } catch (error) {
+      console.error('Error fetching all seances:', error);
+      
+      // Fallback: try without parameters
+      try {
+        const fallbackResponse = await api.get('/seances');
+        if (Array.isArray(fallbackResponse.data)) {
+          return fallbackResponse.data;
+        }
+        if (fallbackResponse.data && fallbackResponse.data.content) {
+          return fallbackResponse.data.content;
+        }
+      } catch (fallbackError) {
+        console.error('Fallback fetch also failed:', fallbackError);
+      }
+      
+      return [];
+    }
   },
 
   // ---- Frontend helper checks (mirror backend rules) ----
