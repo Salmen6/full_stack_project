@@ -30,25 +30,37 @@ const parseDateTime = (dateStr, timeStr) => {
   return dateObj;
 };
 
+const formatDate = (date) => {
+  if (!date) return '';
+  return date.toISOString().split('T')[0];
+};
+
 // -------------------------------------------------------
 // Sub-Components
 // -------------------------------------------------------
 
+/**
+ * EventCard - Displays a single event within a time slot
+ * Positioned absolutely within its time cell based on start time and duration
+ */
 const EventCard = ({ event }) => {
+  // Calculate position within the hour cell (0-100%)
   const topPosition = (event.startMinute / 60) * 100;
-  const height = (event.durationMinutes / 60) * 64;
+  // Calculate height based on duration (each hour = 80px)
+  const height = Math.max((event.durationMinutes / 60) * 80, 40);
 
   return (
     <div
-      className={`absolute left-2 right-2 p-2 rounded border-l-4 text-xs sm:text-sm cursor-pointer hover:brightness-95 transition-all shadow-sm z-10 ${event.color}`}
+      className={`absolute left-1 right-1 p-2 rounded-lg border-l-4 text-xs cursor-pointer hover:brightness-95 transition-all shadow-sm z-10 ${event.color}`}
       style={{
         top: `${topPosition}%`,
         height: `${height}px`,
         minHeight: "40px",
       }}
+      title={`${event.title}\n${event.timeRange}`}
     >
-      <div className="font-semibold truncate leading-tight">{event.title}</div>
-      <div className="flex items-center gap-1 opacity-90 truncate text-xs mt-0.5">
+      <div className="font-semibold truncate leading-tight text-xs">{event.title}</div>
+      <div className="flex items-center gap-1 opacity-90 truncate text-[10px] mt-0.5">
         <Clock size={10} />
         {event.timeRange}
       </div>
@@ -62,15 +74,18 @@ const EventCard = ({ event }) => {
 
 export default function FinalCalendar() {
   const { user } = useAuth();
-  const [currentDate, setCurrentDate] = useState(new Date());
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [dateRange, setDateRange] = useState({ start: null, end: null });
   const scrollRef = useRef(null);
-  const printRef = useRef(null);
 
+  // Scroll to 8 AM on mount
   useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = 512 - 50;
-  }, []);
+    if (scrollRef.current) {
+      // 8 hours * 80px per hour = 640px
+      scrollRef.current.scrollTop = 640 - 100;
+    }
+  }, [loading]);
 
   // -------------------------------------------------------
   // Data Fetching
@@ -90,6 +105,7 @@ export default function FinalCalendar() {
           return;
         }
 
+        // Map affectations to event objects
         const mappedEvents = teacherData.affectations.map((a) => {
           const se = a.seance;
           if (!se) return null;
@@ -125,8 +141,13 @@ export default function FinalCalendar() {
 
         setEvents(mappedEvents);
 
+        // Calculate date range from events
         if (mappedEvents.length > 0) {
-          setCurrentDate(mappedEvents[0].startDate);
+          const dates = mappedEvents.map(e => e.startDate).sort((a, b) => a - b);
+          setDateRange({
+            start: dates[0],
+            end: dates[dates.length - 1]
+          });
         }
 
       } catch (err) {
@@ -140,28 +161,37 @@ export default function FinalCalendar() {
   }, [user]);
 
   // -------------------------------------------------------
-  // Date Controls
+  // Generate Date Array
   // -------------------------------------------------------
+  const dateColumns = React.useMemo(() => {
+    if (!dateRange.start || !dateRange.end) return [];
 
-  const navigateDay = (direction) => {
-    const newDate = new Date(currentDate);
-    newDate.setDate(currentDate.getDate() + direction);
-    setCurrentDate(newDate);
-  };
+    const dates = [];
+    const current = new Date(dateRange.start);
+    const end = new Date(dateRange.end);
 
-  const goToToday = () => setCurrentDate(new Date());
-
-  const handleDateInput = (e) => {
-    const d = new Date(e.target.value);
-    if (!isNaN(d.getTime())) {
-      setCurrentDate(d);
+    while (current <= end) {
+      dates.push(new Date(current));
+      current.setDate(current.getDate() + 1);
     }
+
+    return dates;
+  }, [dateRange]);
+
+  // -------------------------------------------------------
+  // Get Events for Specific Date and Hour
+  // -------------------------------------------------------
+  const getEventsForCell = (date, hour) => {
+    const dateStr = formatDate(date);
+    return events.filter(e => {
+      const eventDateStr = formatDate(e.startDate);
+      return eventDateStr === dateStr && e.startHour === hour;
+    });
   };
 
   // -------------------------------------------------------
   // Print & Download Functions
   // -------------------------------------------------------
-
   const handlePrint = () => {
     window.print();
   };
@@ -186,12 +216,7 @@ export default function FinalCalendar() {
     downloadAnchorNode.remove();
   };
 
-  const isToday = isSameDay(currentDate, new Date());
-  const now = new Date();
-  const currentHour = now.getHours();
-  const currentMinute = now.getMinutes();
-
-  const todaysEvents = events.filter((e) => isSameDay(e.startDate, currentDate));
+  const hoursArray = getHoursArray();
 
   // -------------------------------------------------------
   // Render
@@ -218,126 +243,185 @@ export default function FinalCalendar() {
         }
       `}</style>
 
-      <div className="flex flex-col h-screen bg-white text-gray-800 font-sans max-w-4xl mx-auto shadow-2xl overflow-hidden border-x border-gray-200">
+      <div className="flex flex-col h-screen bg-gradient-to-br from-slate-50 to-indigo-50 text-gray-800 font-sans">
 
         {/* Header */}
-        <header className="flex-none bg-white border-b border-gray-200 p-4 sticky top-0 z-30 no-print">
-          <div className="flex items-center justify-between mb-4">
-            <h1 className="text-2xl font-bold text-gray-900">📅 My Surveillance Calendar</h1>
-            <div className="flex items-center gap-2">
-              <button 
-                onClick={handlePrint} 
-                className="px-3 py-1.5 text-sm font-medium text-green-600 bg-green-50 hover:bg-green-100 rounded-md flex items-center gap-1"
-                title="Print Calendar"
-              >
-                <Printer size={16} /> Print
-              </button>
-              <button 
-                onClick={handleDownload} 
-                className="px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md flex items-center gap-1"
-                title="Download as JSON"
-              >
-                <Download size={16} /> Save
-              </button>
-              <button 
-                onClick={goToToday} 
-                className="px-3 py-1.5 text-sm font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-md"
-              >
-                Today
-              </button>
-              <div className="flex bg-gray-100 rounded-md p-0.5">
-                <button onClick={() => navigateDay(-1)} className="p-1.5 hover:bg-white hover:shadow-sm rounded-md text-gray-600">
-                  <ChevronLeft size={20} />
+        <header className="flex-none bg-white border-b border-gray-200 p-4 shadow-sm no-print">
+          <div className="max-w-7xl mx-auto">
+            <div className="flex items-center justify-between mb-3">
+              <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+                <CalendarIcon className="text-indigo-600" size={28} />
+                My Surveillance Calendar
+              </h1>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handlePrint}
+                  className="px-4 py-2 text-sm font-medium text-green-700 bg-green-50 hover:bg-green-100 rounded-lg flex items-center gap-2 transition-colors border border-green-200"
+                  title="Print Calendar"
+                >
+                  <Printer size={16} /> Print
                 </button>
-                <button onClick={() => navigateDay(1)} className="p-1.5 hover:bg-white hover:shadow-sm rounded-md text-gray-600">
-                  <ChevronRight size={20} />
+                <button
+                  onClick={handleDownload}
+                  className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg flex items-center gap-2 transition-colors border border-blue-200"
+                  title="Download as JSON"
+                >
+                  <Download size={16} /> Download
                 </button>
               </div>
             </div>
-          </div>
 
-          <div className="flex items-center justify-between">
-            <div className="flex flex-col">
-              <span className={`text-4xl font-bold ${isToday ? "text-indigo-600" : "text-gray-800"}`}>
-                {currentDate.getDate()}
-              </span>
-              <span className="text-gray-500 font-medium uppercase tracking-wide text-sm">
-                {currentDate.toLocaleDateString("en-US", { weekday: "long", month: "long", year: "numeric" })}
-              </span>
-            </div>
-            <label className="flex items-center gap-2 text-sm font-medium text-gray-500 hover:text-indigo-600 cursor-pointer p-2 rounded-lg hover:bg-gray-50 transition-colors relative">
-              <CalendarIcon size={16} />
-              <span>Jump to Date</span>
-              <input
-                type="date"
-                className="absolute inset-0 opacity-0 cursor-pointer"
-                onChange={handleDateInput}
-                value={currentDate.toLocaleDateString('en-CA')}
-              />
-            </label>
+            {!loading && events.length > 0 && (
+              <div className="text-sm text-gray-600">
+                <span className="font-medium">Period:</span> {dateRange.start?.toLocaleDateString()} - {dateRange.end?.toLocaleDateString()}
+                <span className="ml-4 font-medium">Total Assignments:</span> {events.length}
+              </div>
+            )}
           </div>
         </header>
 
-        {/* Body */}
-        <div ref={scrollRef} id="printable-calendar" className="flex-1 overflow-y-auto relative scroll-smooth">
-          
-          {/* Print Header - Only visible when printing */}
-          <div className="hidden print:block p-4 border-b border-gray-200 mb-4">
-            <h1 className="text-2xl font-bold text-gray-900">Surveillance Calendar</h1>
-            <p className="text-sm text-gray-600">Teacher: {user?.nomComplet || 'N/A'}</p>
-            <p className="text-sm text-gray-600">Generated: {new Date().toLocaleDateString()}</p>
-          </div>
+        {/* Calendar Body */}
+        <div ref={scrollRef} id="printable-calendar" className="flex-1 overflow-auto bg-white">
+          <div className="max-w-7xl mx-auto p-4">
 
-          <div className="border-b border-gray-100 p-2 flex text-xs text-gray-500">
-            <div className="w-16 text-right pr-4 font-medium pt-1">All Day</div>
-            <div className="flex-1 min-h-[2rem]">
-              {loading ? (
-                <span className="text-gray-400">Loading...</span>
-              ) : todaysEvents.length === 0 ? (
-                <span className="text-gray-400 italic">No assignments today</span>
-              ) : null}
+            {/* Print Header - Only visible when printing */}
+            <div className="hidden print:block mb-4 pb-4 border-b border-gray-200">
+              <h1 className="text-2xl font-bold text-gray-900 mb-2">Surveillance Calendar</h1>
+              <p className="text-sm text-gray-600">Teacher: {user?.nomComplet || 'N/A'}</p>
+              <p className="text-sm text-gray-600">Generated: {new Date().toLocaleDateString()}</p>
+              {dateRange.start && (
+                <p className="text-sm text-gray-600">
+                  Period: {dateRange.start.toLocaleDateString()} - {dateRange.end?.toLocaleDateString()}
+                </p>
+              )}
             </div>
-          </div>
 
-          <div className="relative min-h-[1440px]">
-            {getHoursArray().map((hour) => (
-              <div key={hour} className="flex group h-16 relative">
-                <div className="w-16 flex-none border-r border-gray-100 text-right pr-3 -mt-2.5 bg-white z-10 select-none">
-                  <span className="text-xs font-medium text-gray-400 block">
-                    {hour === 0 ? "12 AM" : hour < 12 ? `${hour} AM` : hour === 12 ? "12 PM" : `${hour - 12} PM`}
-                  </span>
+            {loading ? (
+              <div className="flex h-96 items-center justify-center">
+                <div className="text-center">
+                  <div className="mb-4 h-12 w-12 mx-auto rounded-full border-4 border-indigo-200 border-t-indigo-600 animate-spin"></div>
+                  <p className="text-lg font-bold text-gray-800">Loading calendar...</p>
                 </div>
-                <div className="flex-1 relative border-b border-gray-100 border-dashed">
-                  {isToday && hour === currentHour && (
-                    <div 
-                      className="absolute left-0 right-0 border-t-2 border-red-500 z-20 flex items-center pointer-events-none no-print" 
-                      style={{ top: `${(currentMinute / 60) * 100}%` }}
-                    >
-                      <div className="w-2.5 h-2.5 bg-red-500 rounded-full -ml-1.5"></div>
+              </div>
+            ) : events.length === 0 ? (
+              <div className="flex h-96 items-center justify-center">
+                <div className="text-center text-gray-500">
+                  <CalendarIcon size={48} className="mx-auto mb-3 opacity-50" />
+                  <p className="text-lg font-medium">No assignments found</p>
+                  <p className="text-sm mt-1">You have no surveillance sessions assigned yet.</p>
+                </div>
+              </div>
+            ) : (
+              <div className="border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+                {/* Calendar Grid */}
+                <div className="overflow-x-auto">
+                  <div className="inline-block min-w-full">
+                    <div className="grid" style={{ gridTemplateColumns: `80px repeat(${dateColumns.length}, 120px)` }}>
+                      
+                      {/* Header Row - Time Label */}
+                      <div className="sticky top-0 left-0 z-30 bg-indigo-600 text-white font-bold text-xs uppercase tracking-wider p-3 border-r border-indigo-500 flex items-center justify-center">
+                        Time
+                      </div>
+
+                      {/* Header Row - Dates */}
+                      {dateColumns.map((date, idx) => {
+                        const isToday = isSameDay(date, new Date());
+                        return (
+                          <div
+                            key={idx}
+                            className={`sticky top-0 z-20 p-3 border-r border-b border-gray-200 text-center ${
+                              isToday ? 'bg-indigo-100 text-indigo-900 font-bold' : 'bg-gray-50 text-gray-700'
+                            }`}
+                          >
+                            <div className="text-xs font-semibold uppercase tracking-wide">
+                              {date.toLocaleDateString('en-US', { weekday: 'short' })}
+                            </div>
+                            <div className={`text-lg font-bold mt-1 ${isToday ? 'text-indigo-600' : ''}`}>
+                              {date.getDate()}
+                            </div>
+                            <div className="text-[10px] text-gray-500 mt-0.5">
+                              {date.toLocaleDateString('en-US', { month: 'short' })}
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                      {/* Time Rows */}
+                      {hoursArray.map((hour) => (
+                        <React.Fragment key={hour}>
+                          {/* Hour Label */}
+                          <div className="sticky left-0 z-10 bg-gray-100 text-gray-700 text-xs font-semibold p-2 border-r border-b border-gray-200 text-center">
+                            <div className="leading-tight">
+                              {hour === 0 ? "12 AM" : hour < 12 ? `${hour} AM` : hour === 12 ? "12 PM" : `${hour - 12} PM`}
+                            </div>
+                          </div>
+
+                          {/* Date Cells for this Hour */}
+                          {dateColumns.map((date, idx) => {
+                            const cellEvents = getEventsForCell(date, hour);
+                            const isToday = isSameDay(date, new Date());
+                            const isCurrentHour = isToday && new Date().getHours() === hour;
+
+                            return (
+                              <div
+                                key={idx}
+                                className={`relative border-r border-b border-gray-200 min-h-[80px] ${
+                                  isCurrentHour ? 'bg-yellow-50' : 'bg-white'
+                                } hover:bg-gray-50 transition-colors`}
+                              >
+                                {/* Current time indicator */}
+                                {isCurrentHour && (
+                                  <div
+                                    className="absolute left-0 right-0 border-t-2 border-red-500 z-20 pointer-events-none"
+                                    style={{ top: `${(new Date().getMinutes() / 60) * 100}%` }}
+                                  >
+                                    <div className="w-2 h-2 bg-red-500 rounded-full -ml-1 -mt-1"></div>
+                                  </div>
+                                )}
+
+                                {/* Events */}
+                                {cellEvents.map((event) => (
+                                  <EventCard key={event.id} event={event} />
+                                ))}
+
+                                {/* Empty state indicator */}
+                                {cellEvents.length === 0 && (
+                                  <div className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-20 transition-opacity">
+                                    <div className="w-1 h-1 rounded-full bg-gray-300"></div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </React.Fragment>
+                      ))}
                     </div>
-                  )}
-                  {todaysEvents.filter((event) => event.startHour === hour).map((event) => (
-                    <EventCard key={event.id} event={event} />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Summary Section - Visible on print */}
+            {events.length > 0 && (
+              <div className="hidden print:block mt-6 pt-4 border-t border-gray-200">
+                <h2 className="text-lg font-bold mb-3">Assignment Summary</h2>
+                <div className="grid grid-cols-1 gap-2 text-sm">
+                  {events.map((event, idx) => (
+                    <div key={idx} className="flex justify-between items-center py-1 border-b border-gray-100">
+                      <div>
+                        <span className="font-semibold">{event.startDate.toLocaleDateString()}</span>
+                        <span className="mx-2">•</span>
+                        <span>{event.timeRange}</span>
+                      </div>
+                      <span className="text-gray-600">{event.title}</span>
+                    </div>
                   ))}
                 </div>
               </div>
-            ))}
+            )}
+
           </div>
         </div>
-
-        {/* Summary Section - Visible on print */}
-        {events.length > 0 && (
-          <div className="hidden print:block p-4 border-t border-gray-200 mt-4">
-            <h2 className="text-lg font-bold mb-2">Assignment Summary</h2>
-            <ul className="text-sm space-y-1">
-              {events.map((event, idx) => (
-                <li key={idx}>
-                  <strong>{event.startDate.toLocaleDateString()}</strong> - {event.timeRange}: {event.title}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
       </div>
     </>
   );

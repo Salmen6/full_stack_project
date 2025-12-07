@@ -152,10 +152,15 @@ const TeacherDashboard = () => {
 
   /**
    * Determines the status of a session for the current teacher
-   * Priority order: assigned > subject_conflict > quota > time_overlap > full > open
    * 
-   * IMPORTANT: Subject conflict check is prioritized to ensure teachers cannot
-   * supervise exams for subjects they teach (conflict of interest)
+   * Priority order: 
+   * 1. assigned → Already assigned (green)
+   * 2. subject_conflict → Teacher teaches this subject (red)
+   * 3. survey_conflict → Conflicts with teacher's taught session at same time (red)
+   * 4. quota → Quota reached (rose)
+   * 5. overlap → Time conflict with existing assignment (rose)
+   * 6. full → Session full (gray)
+   * 7. open → Available (indigo)
    */
   const getSessionStatus = (s) => {
     if (!teacherData) return { status: 'loading', label: 'Loading...', reason: '' };
@@ -166,15 +171,22 @@ const TeacherDashboard = () => {
       return { status: 'assigned', label: 'Already Assigned', reason: 'You are already assigned to this session' };
     }
 
-    // **CRITICAL: Check subject conflict FIRST (highest priority after assignment)**
-    // Teachers cannot supervise exams for subjects they teach
-    // This uses the subjectConflict helper from ExamService which compares
-    // the teacher's matieres against the epreuves in this session
+    // CRITICAL: Check if teacher teaches this subject (subject conflict)
     if (ExamService.subjectConflict(teacherData, s)) {
       return { 
         status: 'subject_conflict', 
         label: 'Your Subject', 
         reason: 'You teach this subject and cannot supervise it' 
+      };
+    }
+
+    // NEW: Check for survey conflict
+    // Teacher cannot survey sessions that conflict with sessions where they teach
+    if (ExamService.surveyConflict(teacherData, s, seances)) {
+      return {
+        status: 'survey_conflict',
+        label: 'Survey Conflict',
+        reason: 'Conflicts with a session of your subject at the same time'
       };
     }
 
@@ -185,7 +197,7 @@ const TeacherDashboard = () => {
       return { status: 'quota', label: 'Quota Reached', reason: 'You have reached your surveillance quota' };
     }
 
-    // Check time overlap
+    // Check time overlap with existing assignments
     if (ExamService.timeOverlap(teacherData, s)) {
       return { status: 'overlap', label: 'Time Conflict', reason: 'You have another assignment at this time' };
     }
@@ -201,30 +213,39 @@ const TeacherDashboard = () => {
   };
 
   /**
-   * Calculate date range: from first session to last session
-   * This replaces the previous logic that showed all dates
+   * Calculate date range: from ACTUAL first session to ACTUAL last session
+   * Exclude Sundays from the display
+   * 
+   * FIXED: Now correctly finds min and max dates across ALL sessions,
+   * regardless of gaps in the data
    */
   const calendarDates = useMemo(() => {
     if (seances.length === 0) return [];
     
-    // Extract all valid dates from sessions
-    const dates = seances
+    // Extract all valid dates from sessions and parse them as Date objects
+    const sessionDates = seances
       .map(s => s.date || s.date_seance)
       .filter(Boolean)
-      .sort();
+      .map(dateStr => new Date(dateStr));
     
-    if (dates.length === 0) return [];
+    if (sessionDates.length === 0) return [];
     
-    // Get first and last date
-    const firstDate = new Date(dates[0]);
-    const lastDate = new Date(dates[dates.length - 1]);
+    // Find ACTUAL minimum and maximum dates using timestamps
+    const minTimestamp = Math.min(...sessionDates.map(d => d.getTime()));
+    const maxTimestamp = Math.max(...sessionDates.map(d => d.getTime()));
     
-    // Generate all dates between first and last (inclusive)
+    const firstDate = new Date(minTimestamp);
+    const lastDate = new Date(maxTimestamp);
+    
+    // Generate ALL dates between first and last (inclusive), excluding Sundays
     const dateRange = [];
     const currentDate = new Date(firstDate);
     
     while (currentDate <= lastDate) {
-      dateRange.push(currentDate.toISOString().split('T')[0]);
+      // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+      if (currentDate.getDay() !== 0) {
+        dateRange.push(currentDate.toISOString().split('T')[0]);
+      }
       currentDate.setDate(currentDate.getDate() + 1);
     }
     
@@ -257,8 +278,15 @@ const TeacherDashboard = () => {
       textColor = "text-emerald-900";
       Icon = Check;
     } 
-    // **NEW: Style for subject conflict sessions (distinctive red/orange)**
+    // Style for subject conflict sessions (distinctive red/orange)
     else if (status === 'subject_conflict') {
+      cardClass += "bg-red-50 border-red-400 shadow-red-100 opacity-90";
+      btnClass += "bg-red-200 border-red-400 text-red-800 cursor-not-allowed";
+      textColor = "text-red-900";
+      Icon = Lock;
+    }
+    // NEW: Style for survey conflict sessions (same red as subject conflict)
+    else if (status === 'survey_conflict') {
       cardClass += "bg-red-50 border-red-400 shadow-red-100 opacity-90";
       btnClass += "bg-red-200 border-red-400 text-red-800 cursor-not-allowed";
       textColor = "text-red-900";
@@ -288,9 +316,9 @@ const TeacherDashboard = () => {
     return (
       <div className={cardClass}>
         {/* Lock icon for all locked sessions */}
-        {(status === 'subject_conflict' || status === 'overlap' || status === 'quota') && (
+        {(status === 'subject_conflict' || status === 'survey_conflict' || status === 'overlap' || status === 'quota') && (
           <div className="absolute top-2 right-2">
-            <Lock className={status === 'subject_conflict' ? 'text-red-600' : 'text-rose-500'} size={20} />
+            <Lock className={status === 'subject_conflict' || status === 'survey_conflict' ? 'text-red-600' : 'text-rose-500'} size={20} />
           </div>
         )}
 
@@ -315,7 +343,7 @@ const TeacherDashboard = () => {
 
           {reason && (
             <div className={`text-[10px] rounded px-2 py-1 mb-2 flex items-center gap-1 ${
-              status === 'subject_conflict' 
+              status === 'subject_conflict' || status === 'survey_conflict'
                 ? 'text-red-700 bg-red-100 border border-red-300' 
                 : 'text-slate-600 bg-slate-50'
             }`}>
@@ -340,6 +368,7 @@ const TeacherDashboard = () => {
               {Icon && <Icon size={14} />}
               {status === 'assigned' ? 'Assigned' :
                status === 'subject_conflict' ? 'Your Subject' :
+               status === 'survey_conflict' ? 'Survey Conflict' :
                status === 'open' ? 'Submit Wish' :
                label}
             </>
