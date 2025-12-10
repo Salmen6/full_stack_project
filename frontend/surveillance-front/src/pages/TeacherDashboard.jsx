@@ -100,7 +100,7 @@ const UserStatsCard = ({ user, teacherData }) => {
 
 // --- Main Component ---
 const TeacherDashboard = () => {
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth(); // ADDED: refreshUser
   const [seances, setSeances] = useState([]);
   const [teacherData, setTeacherData] = useState(null);
   const [message, setMessage] = useState(null);
@@ -127,6 +127,7 @@ const TeacherDashboard = () => {
     }
   };
 
+  // UPDATED: handleWish function with refreshUser call
   const handleWish = async (idSeance) => {
     if (!teacherData) return;
 
@@ -138,6 +139,12 @@ const TeacherDashboard = () => {
 
       if (res.data.success) {
         setMessage({ type: 'success', text: res.data.message });
+        
+        // CRITICAL FIX: Refresh user context to update stored teacher data
+        // This ensures FinalCalendar gets updated data when navigating
+        await refreshUser();
+        
+        // Then reload local data
         await loadData();
       } else {
         setMessage({ type: 'danger', text: res.data.message });
@@ -193,34 +200,20 @@ const TeacherDashboard = () => {
     return { status: 'open', label: 'Available', reason: '' };
   };
 
-  /**
-   * FIXED: Calculate date range correctly
-   * 
-   * Key changes:
-   * 1. Parse dates and find TRUE min/max across ALL sessions
-   * 2. Generate ALL dates between min and max (inclusive)
-   * 3. Exclude Sundays from the display
-   * 
-   * This ensures gaps in session dates don't truncate the calendar
-   */
   const calendarDates = useMemo(() => {
     if (seances.length === 0) return [];
     
-    // Extract and parse all session dates
     const sessionDates = seances
       .map(s => {
         const dateStr = s.date || s.date_seance || s.dateSeance;
         if (!dateStr) return null;
-        
-        // Parse the date string (format: YYYY-MM-DD)
-        const date = new Date(dateStr + 'T00:00:00'); // Force local timezone
+        const date = new Date(dateStr + 'T00:00:00');
         return date;
       })
-      .filter(d => d && !isNaN(d.getTime())); // Filter out invalid dates
+      .filter(d => d && !isNaN(d.getTime()));
     
     if (sessionDates.length === 0) return [];
     
-    // Find ABSOLUTE minimum and maximum dates
     let minDate = sessionDates[0];
     let maxDate = sessionDates[0];
     
@@ -229,20 +222,16 @@ const TeacherDashboard = () => {
       if (date > maxDate) maxDate = date;
     });
     
-    // Generate ALL dates between min and max (inclusive), excluding Sundays
     const dateRange = [];
     const currentDate = new Date(minDate);
     
     while (currentDate <= maxDate) {
-      // 0 = Sunday, skip it
       if (currentDate.getDay() !== 0) {
-        // Format as YYYY-MM-DD
         const year = currentDate.getFullYear();
         const month = String(currentDate.getMonth() + 1).padStart(2, '0');
         const day = String(currentDate.getDate()).padStart(2, '0');
         dateRange.push(`${year}-${month}-${day}`);
       }
-      // Move to next day
       currentDate.setDate(currentDate.getDate() + 1);
     }
     
@@ -418,7 +407,6 @@ const TeacherDashboard = () => {
           <div className="lg:col-span-9">
             <div className="rounded-2xl border border-indigo-200 bg-white shadow-xl overflow-hidden relative">
               
-              {/* Scroll indicator - shown when content overflows */}
               {!isLoading && calendarDates.length > 5 && (
                 <div className="absolute right-0 top-1/2 -translate-y-1/2 z-40 bg-gradient-to-l from-indigo-600 to-transparent w-16 h-full pointer-events-none flex items-center justify-end pr-4">
                   <div className="animate-bounce text-white text-2xl">→</div>
@@ -450,9 +438,7 @@ const TeacherDashboard = () => {
                 </div>
               ) : (
                 <div className="overflow-x-auto pb-2 scrollbar-hide relative" style={{ scrollBehavior: 'smooth' }}>
-                  {/* Left shadow gradient when scrolled */}
                   <div className="absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-white to-transparent pointer-events-none z-10"></div>
-                  {/* Right shadow gradient */}
                   <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-white to-transparent pointer-events-none z-10"></div>
                   
                   <div className="p-6" style={{ minWidth: `${90 + (calendarDates.length * 170)}px` }}>

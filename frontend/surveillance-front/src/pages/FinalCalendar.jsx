@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, Printer, Download } from "lucide-react";
+import { Calendar, Clock, Printer, Download, RefreshCw, BookOpen } from "lucide-react";
 import ExamService from "../services/ExamService";
 import { useAuth } from "../context/AuthContext";
 
@@ -7,21 +7,18 @@ import { useAuth } from "../context/AuthContext";
 // Helper Functions
 // -------------------------------------------------------
 
-const isSameDay = (d1, d2) => {
-  if (!d1 || !d2) return false;
-  return (
-    d1.getFullYear() === d2.getFullYear() &&
-    d1.getMonth() === d2.getMonth() &&
-    d1.getDate() === d2.getDate()
-  );
-};
-
-const getHoursArray = () => Array.from({ length: 24 }, (_, i) => i);
-
 const parseDateTime = (dateStr, timeStr) => {
   if (!dateStr || !timeStr) return null;
-  const dateObj = new Date(dateStr);
+  
+  let dateObj;
+  if (typeof dateStr === 'string') {
+    dateObj = new Date(dateStr + 'T00:00:00');
+  } else {
+    dateObj = new Date(dateStr);
+  }
+  
   if (isNaN(dateObj.getTime())) return null;
+  
   const [hours, minutes] = timeStr.split(':').map(Number);
   dateObj.setHours(hours || 0);
   dateObj.setMinutes(minutes || 0);
@@ -32,36 +29,31 @@ const parseDateTime = (dateStr, timeStr) => {
 
 const formatDate = (date) => {
   if (!date) return '';
-  return date.toISOString().split('T')[0];
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const isSameDay = (d1, d2) => {
+  if (!d1 || !d2) return false;
+  return formatDate(d1) === formatDate(d2);
 };
 
 // -------------------------------------------------------
-// Sub-Components
+// Event Cell Component
 // -------------------------------------------------------
 
-/**
- * EventCard - Displays a single event within a time slot
- * Positioned absolutely within its time cell based on start time and duration
- */
-const EventCard = ({ event }) => {
-  // Calculate position within the hour cell (0-100%)
-  const topPosition = (event.startMinute / 60) * 100;
-  // Calculate height based on duration (each hour = 80px)
-  const height = Math.max((event.durationMinutes / 60) * 80, 40);
+const EventCell = ({ event }) => {
+  if (!event) return null;
 
   return (
-    <div
-      className={`absolute left-1 right-1 p-2 rounded-lg border-l-4 text-xs cursor-pointer hover:brightness-95 transition-all shadow-sm z-10 ${event.color}`}
-      style={{
-        top: `${topPosition}%`,
-        height: `${height}px`,
-        minHeight: "40px",
-      }}
-      title={`${event.title}\n${event.timeRange}`}
-    >
-      <div className="font-semibold truncate leading-tight text-xs">{event.title}</div>
-      <div className="flex items-center gap-1 opacity-90 truncate text-[10px] mt-0.5">
-        <Clock size={10} />
+    <div className="absolute inset-1 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg p-2 shadow-lg border-2 border-indigo-300 overflow-hidden hover:scale-105 transition-transform duration-200">
+      <div className="text-white text-xs font-bold truncate flex items-center gap-1">
+        <BookOpen size={12} className="flex-shrink-0" />
+        <span className="truncate">{event.title}</span>
+      </div>
+      <div className="text-indigo-100 text-[10px] font-semibold mt-1">
         {event.timeRange}
       </div>
     </div>
@@ -73,40 +65,36 @@ const EventCard = ({ event }) => {
 // -------------------------------------------------------
 
 export default function FinalCalendar() {
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [dateRange, setDateRange] = useState({ start: null, end: null });
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState(Date.now());
   const scrollRef = useRef(null);
 
-  // Scroll to 8 AM on mount
-  useEffect(() => {
-    if (scrollRef.current) {
-      // 8 hours * 80px per hour = 640px
-      scrollRef.current.scrollTop = 640 - 100;
-    }
-  }, [loading]);
+  // Hours range: 8 AM to 5 PM
+  const hours = [8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
 
   // -------------------------------------------------------
   // Data Fetching
   // -------------------------------------------------------
-  useEffect(() => {
-    if (!user?.id_user) return;
+  const fetchData = async () => {
+    if (!user?.id_user) {
+      setLoading(false);
+      return;
+    }
 
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        const res = await ExamService.getEnseignantByUserId(user.id_user);
-        const teacherData = res.data;
+    try {
+      const res = await ExamService.getEnseignantByUserId(user.id_user);
+      const teacherData = res.data;
 
-        if (!teacherData?.affectations || teacherData.affectations.length === 0) {
-          setEvents([]);
-          setLoading(false);
-          return;
-        }
+      if (!teacherData?.affectations || teacherData.affectations.length === 0) {
+        setEvents([]);
+        return;
+      }
 
-        // Map affectations to event objects
-        const mappedEvents = teacherData.affectations.map((a) => {
+      const mappedEvents = teacherData.affectations
+        .map((a) => {
           const se = a.seance;
           if (!se) return null;
 
@@ -122,7 +110,7 @@ export default function FinalCalendar() {
           const duration = (end - start) / (1000 * 60);
 
           const titleText = (se.epreuves || [])
-            .map((ev) => ev.nom)
+            .map((ev) => ev.nom || ev.matiere?.nom)
             .filter(Boolean)
             .join(', ');
 
@@ -131,63 +119,102 @@ export default function FinalCalendar() {
             title: titleText || "Exam Session",
             startDate: start,
             endDate: end,
+            date: formatDate(start),
             startHour: start.getHours(),
             startMinute: start.getMinutes(),
             durationMinutes: duration,
-            color: "bg-indigo-100 border-indigo-500 text-indigo-700",
-            timeRange: `${String(start.getHours()).padStart(2, "0")}:${String(start.getMinutes()).padStart(2, "0")} - ${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}`,
+            timeRange: `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')} - ${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`,
           };
-        }).filter(Boolean);
+        })
+        .filter(Boolean);
 
-        setEvents(mappedEvents);
+      mappedEvents.sort((a, b) => a.startDate - b.startDate);
+      setEvents(mappedEvents);
 
-        // Calculate date range from events
-        if (mappedEvents.length > 0) {
-          const dates = mappedEvents.map(e => e.startDate).sort((a, b) => a - b);
-          setDateRange({
-            start: dates[0],
-            end: dates[dates.length - 1]
-          });
-        }
+    } catch (err) {
+      console.error("Error fetching calendar:", err);
+      setEvents([]);
+    }
+  };
 
-      } catch (err) {
-        console.error("Error fetching calendar:", err);
-      } finally {
-        setLoading(false);
+  // Initial load
+  useEffect(() => {
+    const loadInitialData = async () => {
+      setLoading(true);
+      await fetchData();
+      setLoading(false);
+    };
+
+    loadInitialData();
+  }, [user?.id_user]);
+
+  // Refresh when component becomes visible
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden && user?.id_user) {
+        fetchData();
       }
     };
 
-    fetchData();
-  }, [user]);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [user?.id_user]);
+
+  // Manual refresh handler
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await refreshUser();
+    await fetchData();
+    setRefreshing(false);
+    setLastUpdate(Date.now());
+  };
 
   // -------------------------------------------------------
-  // Generate Date Array
+  // Generate unique dates from events
   // -------------------------------------------------------
   const dateColumns = React.useMemo(() => {
-    if (!dateRange.start || !dateRange.end) return [];
+    if (events.length === 0) return [];
 
-    const dates = [];
-    const current = new Date(dateRange.start);
-    const end = new Date(dateRange.end);
-
-    while (current <= end) {
-      dates.push(new Date(current));
-      current.setDate(current.getDate() + 1);
-    }
-
-    return dates;
-  }, [dateRange]);
-
-  // -------------------------------------------------------
-  // Get Events for Specific Date and Hour
-  // -------------------------------------------------------
-  const getEventsForCell = (date, hour) => {
-    const dateStr = formatDate(date);
-    return events.filter(e => {
-      const eventDateStr = formatDate(e.startDate);
-      return eventDateStr === dateStr && e.startHour === hour;
+    const uniqueDates = new Set();
+    events.forEach(event => {
+      uniqueDates.add(event.date);
     });
+
+    return Array.from(uniqueDates)
+      .sort()
+      .map(dateStr => new Date(dateStr + 'T00:00:00'));
+  }, [events]);
+
+  // -------------------------------------------------------
+  // Get event for specific date and hour
+  // -------------------------------------------------------
+  const getEventForCell = (date, hour) => {
+    const dateStr = formatDate(date);
+    return events.find(e => e.date === dateStr && e.startHour === hour);
   };
+
+  // -------------------------------------------------------
+  // Statistics
+  // -------------------------------------------------------
+  const stats = React.useMemo(() => {
+    if (events.length === 0) return null;
+
+    const totalHours = events.reduce((sum, e) => sum + (e.durationMinutes / 60), 0);
+    const dates = events.map(e => e.startDate);
+    const earliestDate = new Date(Math.min(...dates));
+    const latestDate = new Date(Math.max(...dates));
+
+    return {
+      totalSessions: events.length,
+      totalHours: Math.round(totalHours * 10) / 10,
+      startDate: earliestDate,
+      endDate: latestDate,
+      daysWithSessions: dateColumns.length,
+    };
+  }, [events, dateColumns]);
 
   // -------------------------------------------------------
   // Print & Download Functions
@@ -200,23 +227,24 @@ export default function FinalCalendar() {
     const calendarData = {
       teacherName: user?.nomComplet || 'Unknown Teacher',
       generatedDate: new Date().toISOString(),
+      lastUpdate: new Date(lastUpdate).toISOString(),
+      statistics: stats,
       assignments: events.map(e => ({
         title: e.title,
         date: e.startDate.toLocaleDateString(),
         time: e.timeRange,
+        duration: `${Math.round(e.durationMinutes / 60 * 10) / 10} hours`,
       }))
     };
 
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(calendarData, null, 2));
     const downloadAnchorNode = document.createElement('a');
     downloadAnchorNode.setAttribute("href", dataStr);
-    downloadAnchorNode.setAttribute("download", `calendar_${user?.nomComplet || 'teacher'}.json`);
+    downloadAnchorNode.setAttribute("download", `surveillance_calendar_${user?.nomComplet || 'teacher'}.json`);
     document.body.appendChild(downloadAnchorNode);
     downloadAnchorNode.click();
     downloadAnchorNode.remove();
   };
-
-  const hoursArray = getHoursArray();
 
   // -------------------------------------------------------
   // Render
@@ -224,204 +252,398 @@ export default function FinalCalendar() {
   return (
     <>
       <style>{`
+        /* Print Styles - Force Everything on One Page */
         @media print {
+          @page {
+            size: landscape;
+            margin: 0.3cm;
+          }
+          
+          html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+          }
+          
           body * {
             visibility: hidden;
           }
-          #printable-calendar, #printable-calendar * {
+          
+          #printable-calendar,
+          #printable-calendar * {
             visibility: visible;
           }
+          
           #printable-calendar {
             position: absolute;
             left: 0;
             top: 0;
             width: 100%;
+            height: 100vh;
+            background: white;
+            display: flex;
+            flex-direction: column;
+            page-break-inside: avoid;
+            page-break-after: avoid;
+            page-break-before: avoid;
           }
+          
           .no-print {
             display: none !important;
           }
+          
+          .print-header {
+            display: block !important;
+            page-break-after: avoid;
+            flex-shrink: 0;
+            margin-bottom: 0.3cm;
+            padding-bottom: 0.2cm;
+          }
+          
+          .print-header h1 {
+            font-size: 16px !important;
+            margin-bottom: 0.1cm !important;
+          }
+          
+          .print-header p,
+          .print-header div {
+            font-size: 10px !important;
+            margin: 0 !important;
+          }
+          
+          /* Calendar container must fit on one page */
+          .calendar-print-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            page-break-inside: avoid;
+          }
+          
+          /* Remove all scrolling */
+          * {
+            overflow: visible !important;
+            scrollbar-width: none;
+          }
+          
+          *::-webkit-scrollbar {
+            display: none;
+          }
+          
+          /* Table must fit on one page */
+          table {
+            width: 100% !important;
+            height: auto !important;
+            page-break-inside: avoid !important;
+            page-break-after: avoid !important;
+            page-break-before: avoid !important;
+            border-collapse: collapse !important;
+            table-layout: fixed !important;
+          }
+          
+          thead, tbody, tr, th, td {
+            page-break-inside: avoid !important;
+            page-break-after: avoid !important;
+          }
+          
+          /* Scale down everything to fit */
+          table {
+            font-size: 7px !important;
+          }
+          
+          th {
+            padding: 0.1cm !important;
+            font-size: 7px !important;
+          }
+          
+          th > div {
+            font-size: 6px !important;
+            line-height: 1.2 !important;
+            margin: 0 !important;
+          }
+          
+          th > div.text-xl {
+            font-size: 10px !important;
+          }
+          
+          td {
+            padding: 0.05cm !important;
+            height: auto !important;
+            min-height: 0.8cm !important;
+            max-height: 1.2cm !important;
+          }
+          
+          /* Event cells scaled down */
+          .event-cell-print {
+            font-size: 6px !important;
+            padding: 0.05cm !important;
+            border-radius: 2px !important;
+          }
+          
+          .event-cell-print svg {
+            width: 8px !important;
+            height: 8px !important;
+          }
+          
+          /* Remove all shadows, transitions, and effects */
+          * {
+            box-shadow: none !important;
+            transition: none !important;
+            animation: none !important;
+            transform: none !important;
+          }
+          
+          /* Ensure borders are visible but thin */
+          table, th, td {
+            border-width: 0.5pt !important;
+          }
+          
+          /* Sticky positioning doesn't work in print - make relative */
+          .sticky {
+            position: relative !important;
+          }
+          
+          /* Reduce color intensity for print */
+          .bg-gradient-to-br,
+          .bg-indigo-600,
+          .bg-purple-600,
+          .bg-slate-600,
+          .bg-slate-700 {
+            background: #4a5568 !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+          
+          /* Ensure event cells print with colors */
+          .from-indigo-500 {
+            background: #6366f1 !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+        }
+        
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+        
+        .animate-spin {
+          animation: spin 1s linear infinite;
+        }
+
+        /* Hide scrollbar but allow scrolling */
+        .scrollbar-hide {
+          -ms-overflow-style: none;
+          scrollbar-width: none;
+        }
+        
+        .scrollbar-hide::-webkit-scrollbar {
+          display: none;
         }
       `}</style>
 
-      <div className="flex flex-col h-screen bg-gradient-to-br from-slate-50 to-indigo-50 text-gray-800 font-sans">
-
-        {/* Header */}
-        <header className="flex-none bg-white border-b border-gray-200 p-4 shadow-sm no-print">
-          <div className="max-w-7xl mx-auto">
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
+        
+        {/* Header - Hidden in print */}
+        <header className="bg-white border-b border-slate-200 shadow-sm no-print sticky top-0 z-30">
+          <div className="max-w-7xl mx-auto px-4 py-4">
             <div className="flex items-center justify-between mb-3">
-              <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-                <CalendarIcon className="text-indigo-600" size={28} />
-                My Surveillance Calendar
-              </h1>
+              <div className="flex items-center gap-3">
+                <div className="bg-gradient-to-br from-indigo-500 to-purple-600 p-2.5 rounded-xl shadow-lg">
+                  <Calendar className="text-white" size={24} />
+                </div>
+                <div>
+                  <h1 className="text-2xl font-bold text-slate-900">Surveillance Calendar</h1>
+                  <p className="text-sm text-slate-600">
+                    {user?.nomComplet || 'Teacher'}
+                  </p>
+                </div>
+              </div>
+
               <div className="flex items-center gap-2">
                 <button
+                  onClick={handleRefresh}
+                  disabled={refreshing}
+                  className="px-3 py-2 text-sm font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg flex items-center gap-2 transition-colors border border-indigo-200 disabled:opacity-50"
+                >
+                  <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />
+                  Refresh
+                </button>
+                <button
                   onClick={handlePrint}
-                  className="px-4 py-2 text-sm font-medium text-green-700 bg-green-50 hover:bg-green-100 rounded-lg flex items-center gap-2 transition-colors border border-green-200"
-                  title="Print Calendar"
+                  className="px-3 py-2 text-sm font-medium text-green-700 bg-green-50 hover:bg-green-100 rounded-lg flex items-center gap-2 transition-colors border border-green-200"
                 >
                   <Printer size={16} /> Print
                 </button>
                 <button
                   onClick={handleDownload}
-                  className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg flex items-center gap-2 transition-colors border border-blue-200"
-                  title="Download as JSON"
+                  className="px-3 py-2 text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg flex items-center gap-2 transition-colors border border-blue-200"
                 >
-                  <Download size={16} /> Download
+                  <Download size={16} /> Export
                 </button>
               </div>
             </div>
 
-            {!loading && events.length > 0 && (
-              <div className="text-sm text-gray-600">
-                <span className="font-medium">Period:</span> {dateRange.start?.toLocaleDateString()} - {dateRange.end?.toLocaleDateString()}
-                <span className="ml-4 font-medium">Total Assignments:</span> {events.length}
+            {/* Statistics - Hidden in print */}
+            {!loading && stats && (
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                <div className="bg-indigo-50 rounded-lg p-2.5 border border-indigo-200">
+                  <div className="text-[10px] text-indigo-600 font-semibold uppercase tracking-wide">Sessions</div>
+                  <div className="text-xl font-bold text-indigo-900 mt-0.5">{stats.totalSessions}</div>
+                </div>
+                <div className="bg-purple-50 rounded-lg p-2.5 border border-purple-200">
+                  <div className="text-[10px] text-purple-600 font-semibold uppercase tracking-wide">Hours</div>
+                  <div className="text-xl font-bold text-purple-900 mt-0.5">{stats.totalHours}h</div>
+                </div>
+                <div className="bg-blue-50 rounded-lg p-2.5 border border-blue-200">
+                  <div className="text-[10px] text-blue-600 font-semibold uppercase tracking-wide">Days</div>
+                  <div className="text-xl font-bold text-blue-900 mt-0.5">{stats.daysWithSessions}</div>
+                </div>
+                <div className="bg-emerald-50 rounded-lg p-2.5 border border-emerald-200 col-span-2">
+                  <div className="text-[10px] text-emerald-600 font-semibold uppercase tracking-wide">Period</div>
+                  <div className="text-sm font-bold text-emerald-900 mt-0.5">
+                    {stats.startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - {stats.endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  </div>
+                </div>
               </div>
             )}
           </div>
         </header>
 
-        {/* Calendar Body */}
-        <div ref={scrollRef} id="printable-calendar" className="flex-1 overflow-auto bg-white">
-          <div className="max-w-7xl mx-auto p-4">
-
+        {/* Main Content */}
+        <main className="max-w-7xl mx-auto px-4 py-6">
+          
+          {/* Print Container */}
+          <div id="printable-calendar">
             {/* Print Header - Only visible when printing */}
-            <div className="hidden print:block mb-4 pb-4 border-b border-gray-200">
-              <h1 className="text-2xl font-bold text-gray-900 mb-2">Surveillance Calendar</h1>
-              <p className="text-sm text-gray-600">Teacher: {user?.nomComplet || 'N/A'}</p>
-              <p className="text-sm text-gray-600">Generated: {new Date().toLocaleDateString()}</p>
-              {dateRange.start && (
-                <p className="text-sm text-gray-600">
-                  Period: {dateRange.start.toLocaleDateString()} - {dateRange.end?.toLocaleDateString()}
-                </p>
-              )}
+            <div className="hidden print-header">
+              <h1 className="text-2xl font-bold text-slate-900 mb-1">Surveillance Calendar</h1>
+              <div className="flex justify-between items-center text-sm">
+                <div>
+                  <p className="font-semibold">Teacher: {user?.nomComplet || 'N/A'}</p>
+                  <p className="text-slate-600">Generated: {new Date().toLocaleDateString()}</p>
+                </div>
+                {stats && (
+                  <div className="text-right">
+                    <p className="font-semibold">Sessions: {stats.totalSessions} • Hours: {stats.totalHours}h</p>
+                    <p className="text-slate-600">
+                      {stats.startDate.toLocaleDateString()} - {stats.endDate.toLocaleDateString()}
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
 
             {loading ? (
-              <div className="flex h-96 items-center justify-center">
+              <div className="flex items-center justify-center py-32">
                 <div className="text-center">
-                  <div className="mb-4 h-12 w-12 mx-auto rounded-full border-4 border-indigo-200 border-t-indigo-600 animate-spin"></div>
-                  <p className="text-lg font-bold text-gray-800">Loading calendar...</p>
+                  <div className="mb-4 h-16 w-16 mx-auto rounded-full border-4 border-indigo-200 border-t-indigo-600 animate-spin"></div>
+                  <p className="text-xl font-bold text-slate-800">Loading calendar...</p>
                 </div>
               </div>
             ) : events.length === 0 ? (
-              <div className="flex h-96 items-center justify-center">
-                <div className="text-center text-gray-500">
-                  <CalendarIcon size={48} className="mx-auto mb-3 opacity-50" />
-                  <p className="text-lg font-medium">No assignments found</p>
-                  <p className="text-sm mt-1">You have no surveillance sessions assigned yet.</p>
+              <div className="flex items-center justify-center py-32">
+                <div className="text-center">
+                  <div className="bg-slate-100 rounded-full p-8 inline-block mb-6">
+                    <Calendar size={64} className="text-slate-400" />
+                  </div>
+                  <p className="text-2xl font-bold text-slate-900 mb-2">No Surveillance Sessions</p>
+                  <p className="text-slate-600 mb-6">You have no surveillance assignments scheduled.</p>
+                  <button
+                    onClick={handleRefresh}
+                    className="px-6 py-3 text-sm font-medium text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 rounded-lg transition-all shadow-lg"
+                  >
+                    Check for Updates
+                  </button>
                 </div>
               </div>
             ) : (
-              <div className="border border-gray-200 rounded-lg overflow-hidden shadow-sm">
-                {/* Calendar Grid */}
-                <div className="overflow-x-auto">
-                  <div className="inline-block min-w-full">
-                    <div className="grid" style={{ gridTemplateColumns: `80px repeat(${dateColumns.length}, 120px)` }}>
-                      
-                      {/* Header Row - Time Label */}
-                      <div className="sticky top-0 left-0 z-30 bg-indigo-600 text-white font-bold text-xs uppercase tracking-wider p-3 border-r border-indigo-500 flex items-center justify-center">
-                        Time
-                      </div>
-
-                      {/* Header Row - Dates */}
-                      {dateColumns.map((date, idx) => {
-                        const isToday = isSameDay(date, new Date());
-                        return (
-                          <div
-                            key={idx}
-                            className={`sticky top-0 z-20 p-3 border-r border-b border-gray-200 text-center ${
-                              isToday ? 'bg-indigo-100 text-indigo-900 font-bold' : 'bg-gray-50 text-gray-700'
-                            }`}
-                          >
-                            <div className="text-xs font-semibold uppercase tracking-wide">
-                              {date.toLocaleDateString('en-US', { weekday: 'short' })}
+              <div className="calendar-print-container bg-white rounded-xl shadow-xl border border-slate-200 overflow-hidden">
+                {/* Calendar Table */}
+                <div className="overflow-x-auto scrollbar-hide">
+                  <table className="w-full border-collapse">
+                    <thead>
+                      <tr>
+                        {/* Time column header */}
+                        <th className="sticky left-0 z-20 bg-gradient-to-br from-slate-700 to-slate-600 text-white font-bold text-sm p-3 border-r-2 border-slate-400 min-w-[80px]">
+                          Time
+                        </th>
+                        
+                        {/* Date column headers */}
+                        {dateColumns.map((date, idx) => {
+                          const isToday = isSameDay(date, new Date());
+                          return (
+                            <th
+                              key={idx}
+                              className={`${
+                                isToday 
+                                  ? 'bg-gradient-to-br from-indigo-600 to-purple-600' 
+                                  : 'bg-gradient-to-br from-slate-600 to-slate-500'
+                              } text-white text-center p-3 border-r border-slate-300 min-w-[140px]`}
+                            >
+                              <div className="text-xs font-semibold uppercase tracking-wider">
+                                {date.toLocaleDateString('en-US', { weekday: 'short' })}
+                              </div>
+                              <div className="text-xl font-bold mt-1">
+                                {date.getDate()}
+                              </div>
+                              <div className="text-xs opacity-90 mt-1">
+                                {date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
+                              </div>
+                            </th>
+                          );
+                        })}
+                      </tr>
+                    </thead>
+                    
+                    <tbody>
+                      {hours.map((hour) => (
+                        <tr key={hour} className="border-b border-slate-200">
+                          {/* Hour label */}
+                          <td className="sticky left-0 z-10 bg-slate-100 text-slate-700 font-bold text-center p-3 border-r-2 border-slate-300">
+                            <div className="text-sm">
+                              {hour === 12 ? '12 PM' : hour < 12 ? `${hour} AM` : `${hour - 12} PM`}
                             </div>
-                            <div className={`text-lg font-bold mt-1 ${isToday ? 'text-indigo-600' : ''}`}>
-                              {date.getDate()}
-                            </div>
-                            <div className="text-[10px] text-gray-500 mt-0.5">
-                              {date.toLocaleDateString('en-US', { month: 'short' })}
-                            </div>
-                          </div>
-                        );
-                      })}
-
-                      {/* Time Rows */}
-                      {hoursArray.map((hour) => (
-                        <React.Fragment key={hour}>
-                          {/* Hour Label */}
-                          <div className="sticky left-0 z-10 bg-gray-100 text-gray-700 text-xs font-semibold p-2 border-r border-b border-gray-200 text-center">
-                            <div className="leading-tight">
-                              {hour === 0 ? "12 AM" : hour < 12 ? `${hour} AM` : hour === 12 ? "12 PM" : `${hour - 12} PM`}
-                            </div>
-                          </div>
-
-                          {/* Date Cells for this Hour */}
+                          </td>
+                          
+                          {/* Date cells */}
                           {dateColumns.map((date, idx) => {
-                            const cellEvents = getEventsForCell(date, hour);
+                            const event = getEventForCell(date, hour);
                             const isToday = isSameDay(date, new Date());
                             const isCurrentHour = isToday && new Date().getHours() === hour;
-
+                            
                             return (
-                              <div
+                              <td
                                 key={idx}
-                                className={`relative border-r border-b border-gray-200 min-h-[80px] ${
+                                className={`relative p-1 border-r border-slate-200 h-20 ${
                                   isCurrentHour ? 'bg-yellow-50' : 'bg-white'
-                                } hover:bg-gray-50 transition-colors`}
+                                }`}
                               >
-                                {/* Current time indicator */}
-                                {isCurrentHour && (
-                                  <div
-                                    className="absolute left-0 right-0 border-t-2 border-red-500 z-20 pointer-events-none"
-                                    style={{ top: `${(new Date().getMinutes() / 60) * 100}%` }}
-                                  >
-                                    <div className="w-2 h-2 bg-red-500 rounded-full -ml-1 -mt-1"></div>
+                                {event ? (
+                                  <div className="absolute inset-1 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg p-2 shadow-lg border-2 border-indigo-300 overflow-hidden hover:scale-105 transition-transform duration-200 event-cell-print">
+                                    <div className="text-white text-xs font-bold truncate flex items-center gap-1">
+                                      <BookOpen size={12} className="flex-shrink-0" />
+                                      <span className="truncate">{event.title}</span>
+                                    </div>
+                                    <div className="text-indigo-100 text-[10px] font-semibold mt-1">
+                                      {event.timeRange}
+                                    </div>
                                   </div>
+                                ) : (
+                                  <div className="h-full"></div>
                                 )}
-
-                                {/* Events */}
-                                {cellEvents.map((event) => (
-                                  <EventCard key={event.id} event={event} />
-                                ))}
-
-                                {/* Empty state indicator */}
-                                {cellEvents.length === 0 && (
-                                  <div className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-20 transition-opacity">
-                                    <div className="w-1 h-1 rounded-full bg-gray-300"></div>
-                                  </div>
-                                )}
-                              </div>
+                              </td>
                             );
                           })}
-                        </React.Fragment>
+                        </tr>
                       ))}
-                    </div>
-                  </div>
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}
-
-            {/* Summary Section - Visible on print */}
-            {events.length > 0 && (
-              <div className="hidden print:block mt-6 pt-4 border-t border-gray-200">
-                <h2 className="text-lg font-bold mb-3">Assignment Summary</h2>
-                <div className="grid grid-cols-1 gap-2 text-sm">
-                  {events.map((event, idx) => (
-                    <div key={idx} className="flex justify-between items-center py-1 border-b border-gray-100">
-                      <div>
-                        <span className="font-semibold">{event.startDate.toLocaleDateString()}</span>
-                        <span className="mx-2">•</span>
-                        <span>{event.timeRange}</span>
-                      </div>
-                      <span className="text-gray-600">{event.title}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
           </div>
-        </div>
+        </main>
       </div>
     </>
   );
