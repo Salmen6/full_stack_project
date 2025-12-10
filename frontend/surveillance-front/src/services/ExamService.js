@@ -195,7 +195,7 @@ const ExamService = {
   },
 
   /**
-   * NEW: Survey Conflict Detection
+   * Survey Conflict Detection
    * 
    * Returns true if the target session conflicts with any session where the teacher teaches.
    * A conflict exists when:
@@ -330,9 +330,20 @@ const ExamService = {
   },
 
   /**
-   * Returns true if the teacher already has an assignment at the same date and start time.
+   * FIXED: Returns true if the teacher already has an assignment that overlaps with the target session.
    * 
-   * Teachers cannot be assigned to multiple sessions at the same time slot.
+   * Teachers cannot be assigned to multiple sessions that have overlapping time intervals.
+   * 
+   * Two time intervals overlap if:
+   * - Interval A: [start1, end1]
+   * - Interval B: [start2, end2]
+   * - Overlap condition: start1 < end2 AND start2 < end1
+   * 
+   * Example overlaps that are now correctly detected:
+   * - Existing: 8:00-10:00, Target: 9:00-11:00 ✓ (overlaps)
+   * - Existing: 8:00-10:00, Target: 8:30-9:30 ✓ (overlaps)
+   * - Existing: 8:00-10:00, Target: 7:30-8:30 ✓ (overlaps)
+   * - Existing: 8:00-10:00, Target: 10:00-12:00 ✗ (no overlap - end equals start)
    * 
    * @param {Object} teacher - Teacher data with affectations
    * @param {Object} seance - Target session to check
@@ -341,11 +352,22 @@ const ExamService = {
   timeOverlap: (teacher, seance) => {
     if (!teacher || !seance) return false;
 
-    // Extract target session's date and time
+    // Extract target session's date and time interval
     const targetDate = seance.date ?? seance.date_seance ?? seance.dateSeance;
     const targetStart = seance.heureDebut ?? seance.heure_debut ?? seance.start;
+    const targetEnd = seance.heureFin ?? seance.heure_fin ?? seance.end;
 
-    if (!targetDate || !targetStart) return false;
+    if (!targetDate || !targetStart || !targetEnd) return false;
+
+    // Convert time string (HH:mm) to minutes for comparison
+    const parseTime = (timeStr) => {
+      if (!timeStr) return 0;
+      const parts = timeStr.split(':');
+      return parseInt(parts[0]) * 60 + parseInt(parts[1] || 0);
+    };
+
+    const targetStartMin = parseTime(targetStart);
+    const targetEndMin = parseTime(targetEnd);
 
     // Get teacher's existing affectations
     const affectations = teacher.affectations || teacher.enseignantDTO?.affectations || [];
@@ -356,9 +378,20 @@ const ExamService = {
       const s = a.seance || a;
       const affDate = s.date ?? s.date_seance ?? s.dateSeance;
       const affStart = s.heureDebut ?? s.heure_debut ?? s.start;
+      const affEnd = s.heureFin ?? s.heure_fin ?? s.end;
       
-      // Time overlap exists if date and start time match
-      return affDate === targetDate && affStart === targetStart;
+      // Must be on the same date
+      if (affDate !== targetDate) return false;
+      
+      // Must have valid time data
+      if (!affStart || !affEnd) return false;
+
+      const affStartMin = parseTime(affStart);
+      const affEndMin = parseTime(affEnd);
+
+      // Check for overlap: affStart < targetEnd AND targetStart < affEnd
+      // This correctly detects all overlapping intervals
+      return affStartMin < targetEndMin && targetStartMin < affEndMin;
     });
   }
 };

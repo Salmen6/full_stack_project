@@ -175,9 +175,9 @@ public class SurveillanceService {
             return "Time conflict with existing assignment.";
         }
 
-        long currentAffectations = ens.getAffectations().size();
+        long currentAssignments = ens.getAffectations().size();
         Double chargeSurveillance = ens.getChargeSurveillance();
-        if (chargeSurveillance != null && currentAffectations >= chargeSurveillance) {
+        if (chargeSurveillance != null && currentAssignments >= chargeSurveillance) {
             return "You have reached your surveillance quota (" + chargeSurveillance + " sessions).";
         }
 
@@ -253,11 +253,30 @@ public class SurveillanceService {
                 .anyMatch(m -> teacherMatiereIds.contains(m.getId()));
     }
 
+    /**
+     * FIXED: Now properly checks for overlapping time intervals.
+     * 
+     * Returns true if the teacher has any existing assignment that overlaps
+     * with the given seance's time interval.
+     * 
+     * Two intervals overlap if: start1 < end2 AND start2 < end1
+     * 
+     * @param ens The teacher to check
+     * @param seance The new seance to check against
+     * @return true if there's a time conflict
+     */
     private boolean hasTimeConflict(Enseignant ens, Seance seance) {
         LocalDate date = seance.getDate();
         LocalTime heureDebut = seance.getHeureDebut();
+        LocalTime heureFin = seance.getHeureFin();
 
-        return affectationRepo.existsByEnseignantAndSeanceDateTime(ens, date, heureDebut);
+        // Validate that we have all required time information
+        if (date == null || heureDebut == null || heureFin == null) {
+            return false;
+        }
+
+        // Use the updated repository method that checks for overlapping intervals
+        return affectationRepo.existsByEnseignantAndSeanceDateTime(ens, date, heureDebut, heureFin);
     }
 
     // =========================
