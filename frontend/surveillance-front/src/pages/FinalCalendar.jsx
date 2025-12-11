@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Calendar, Clock, Printer, Download, RefreshCw, BookOpen } from "lucide-react";
+import { Calendar, Clock, Printer, Download, RefreshCw, BookOpen, X } from "lucide-react";
 import ExamService from "../services/ExamService";
 import { useAuth } from "../context/AuthContext";
 
@@ -41,14 +41,14 @@ const isSameDay = (d1, d2) => {
 };
 
 // -------------------------------------------------------
-// Event Cell Component
+// Event Cell Component (Updated with Cancel Button)
 // -------------------------------------------------------
 
-const EventCell = ({ event }) => {
+const EventCell = ({ event, onCancel, isCancelling }) => {
   if (!event) return null;
 
   return (
-    <div className="absolute inset-1 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg p-2 shadow-lg border-2 border-indigo-300 overflow-hidden hover:scale-105 transition-transform duration-200">
+    <div className="absolute inset-1 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg p-2 shadow-lg border-2 border-indigo-300 overflow-hidden hover:scale-105 transition-transform duration-200 group">
       <div className="text-white text-xs font-bold truncate flex items-center gap-1">
         <BookOpen size={12} className="flex-shrink-0" />
         <span className="truncate">{event.title}</span>
@@ -56,6 +56,23 @@ const EventCell = ({ event }) => {
       <div className="text-indigo-100 text-[10px] font-semibold mt-1">
         {event.timeRange}
       </div>
+      
+      {/* NEW: Cancel Button - Appears on hover */}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onCancel(event);
+        }}
+        disabled={isCancelling}
+        className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity bg-rose-500 hover:bg-rose-600 text-white rounded-full p-1 shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+        title="Cancel this assignment"
+      >
+        {isCancelling ? (
+          <div className="animate-spin rounded-full h-3 w-3 border-b border-white" />
+        ) : (
+          <X size={12} />
+        )}
+      </button>
     </div>
   );
 };
@@ -69,6 +86,8 @@ export default function FinalCalendar() {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [cancellingId, setCancellingId] = useState(null); // NEW: Track which event is being cancelled
+  const [message, setMessage] = useState(null); // NEW: Show success/error messages
   const [lastUpdate, setLastUpdate] = useState(Date.now());
   const scrollRef = useRef(null);
 
@@ -116,6 +135,7 @@ export default function FinalCalendar() {
 
           return {
             id: a.id,
+            seanceId: se.id, // NEW: Store seance ID for cancellation
             title: titleText || "Exam Session",
             startDate: start,
             endDate: end,
@@ -166,10 +186,59 @@ export default function FinalCalendar() {
   // Manual refresh handler
   const handleRefresh = async () => {
     setRefreshing(true);
+    setMessage(null);
     await refreshUser();
     await fetchData();
     setRefreshing(false);
     setLastUpdate(Date.now());
+  };
+
+  // -------------------------------------------------------
+  // NEW: Cancel Event Handler
+  // -------------------------------------------------------
+  /**
+   * Handle cancellation of an assignment
+   * 
+   * This function:
+   * 1. Calls the backend cancelVoeu endpoint
+   * 2. Refreshes the user context
+   * 3. Reloads the calendar data
+   * 4. Shows success/error message
+   * 
+   * @param {Object} event - The event object to cancel
+   */
+  const handleCancelEvent = async (event) => {
+    if (!user?.enseignantDTO?.id || !event.seanceId) {
+      setMessage({ type: 'error', text: 'Unable to cancel: missing teacher or session ID' });
+      return;
+    }
+
+    setCancellingId(event.id);
+    setMessage(null);
+
+    try {
+      const res = await ExamService.cancelVoeu(user.enseignantDTO.id, event.seanceId);
+
+      if (res.data.success) {
+        setMessage({ type: 'success', text: res.data.message });
+        
+        // Refresh user context to update stored data
+        await refreshUser();
+        
+        // Reload calendar to show updated assignments
+        await fetchData();
+        
+        setLastUpdate(Date.now());
+      } else {
+        setMessage({ type: 'error', text: res.data.message });
+      }
+    } catch (err) {
+      const errorMsg = err.response?.data?.message || 'Failed to cancel assignment.';
+      setMessage({ type: 'error', text: errorMsg });
+      console.error('Cancel error:', err);
+    } finally {
+      setCancellingId(null);
+    }
   };
 
   // -------------------------------------------------------
@@ -312,7 +381,6 @@ export default function FinalCalendar() {
             margin: 0 !important;
           }
           
-          /* Calendar container must fit on one page */
           .calendar-print-container {
             flex: 1;
             display: flex;
@@ -321,7 +389,6 @@ export default function FinalCalendar() {
             page-break-inside: avoid;
           }
           
-          /* Remove all scrolling */
           * {
             overflow: visible !important;
             scrollbar-width: none;
@@ -331,7 +398,6 @@ export default function FinalCalendar() {
             display: none;
           }
           
-          /* Table must fit on one page */
           table {
             width: 100% !important;
             height: auto !important;
@@ -347,7 +413,6 @@ export default function FinalCalendar() {
             page-break-after: avoid !important;
           }
           
-          /* Scale down everything to fit */
           table {
             font-size: 7px !important;
           }
@@ -374,7 +439,6 @@ export default function FinalCalendar() {
             max-height: 1.2cm !important;
           }
           
-          /* Event cells scaled down */
           .event-cell-print {
             font-size: 6px !important;
             padding: 0.05cm !important;
@@ -386,7 +450,11 @@ export default function FinalCalendar() {
             height: 8px !important;
           }
           
-          /* Remove all shadows, transitions, and effects */
+          /* Hide cancel buttons in print */
+          .event-cell-print button {
+            display: none !important;
+          }
+          
           * {
             box-shadow: none !important;
             transition: none !important;
@@ -394,17 +462,14 @@ export default function FinalCalendar() {
             transform: none !important;
           }
           
-          /* Ensure borders are visible but thin */
           table, th, td {
             border-width: 0.5pt !important;
           }
           
-          /* Sticky positioning doesn't work in print - make relative */
           .sticky {
             position: relative !important;
           }
           
-          /* Reduce color intensity for print */
           .bg-gradient-to-br,
           .bg-indigo-600,
           .bg-purple-600,
@@ -415,7 +480,6 @@ export default function FinalCalendar() {
             print-color-adjust: exact;
           }
           
-          /* Ensure event cells print with colors */
           .from-indigo-500 {
             background: #6366f1 !important;
             -webkit-print-color-adjust: exact;
@@ -431,7 +495,6 @@ export default function FinalCalendar() {
           animation: spin 1s linear infinite;
         }
 
-        /* Hide scrollbar but allow scrolling */
         .scrollbar-hide {
           -ms-overflow-style: none;
           scrollbar-width: none;
@@ -483,6 +546,17 @@ export default function FinalCalendar() {
                 </button>
               </div>
             </div>
+
+            {/* NEW: Message Display */}
+            {message && (
+              <div className={`p-3 rounded-lg mb-2 ${
+                message.type === 'success' 
+                  ? 'bg-green-50 border border-green-200 text-green-800' 
+                  : 'bg-red-50 border border-red-200 text-red-800'
+              }`}>
+                <p className="text-sm font-medium">{message.text}</p>
+              </div>
+            )}
 
             {/* Statistics - Hidden in print */}
             {!loading && stats && (
@@ -620,15 +694,11 @@ export default function FinalCalendar() {
                                 }`}
                               >
                                 {event ? (
-                                  <div className="absolute inset-1 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg p-2 shadow-lg border-2 border-indigo-300 overflow-hidden hover:scale-105 transition-transform duration-200 event-cell-print">
-                                    <div className="text-white text-xs font-bold truncate flex items-center gap-1">
-                                      <BookOpen size={12} className="flex-shrink-0" />
-                                      <span className="truncate">{event.title}</span>
-                                    </div>
-                                    <div className="text-indigo-100 text-[10px] font-semibold mt-1">
-                                      {event.timeRange}
-                                    </div>
-                                  </div>
+                                  <EventCell 
+                                    event={event} 
+                                    onCancel={handleCancelEvent}
+                                    isCancelling={cancellingId === event.id}
+                                  />
                                 ) : (
                                   <div className="h-full"></div>
                                 )}

@@ -90,6 +90,47 @@ public class ExamController {
     }
 
     // =========================
+    // CANCEL WISH - NEW ENDPOINT
+    // =========================
+    /**
+     * NEW: Cancel a teacher's wish and remove the corresponding assignment.
+     * 
+     * This endpoint:
+     * 1. Deletes the Voeu (wish) record
+     * 2. Deletes the corresponding Affectation (assignment)
+     * 3. Decrements the nbSurveillantsInscrits counter on the Seance
+     * 
+     * @param idEnseignant The teacher's ID
+     * @param idSeance The session ID
+     * @return ResponseEntity with success/failure message
+     */
+    @DeleteMapping("/voeux")
+    public ResponseEntity<Map<String, Object>> cancelVoeu(
+            @RequestParam Long idEnseignant,
+            @RequestParam Long idSeance) {
+        try {
+            String result = service.cancelVoeu(idEnseignant, idSeance);
+            
+            Map<String, Object> response = new HashMap<>();
+            boolean success = result.contains("successfully");
+            
+            response.put("success", success);
+            response.put("message", result);
+            
+            if (success) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.badRequest().body(response);
+            }
+        } catch (Exception e) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", false);
+            response.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(response);
+        }
+    }
+
+    // =========================
     // AFFECTATION (ASSIGNMENT)
     // =========================
     @PostMapping("/affectation")

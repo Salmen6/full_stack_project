@@ -37,6 +37,21 @@ const ExamService = {
   submitVoeu: (idEnseignant, idSeance) =>
     api.post('/voeux', null, { params: { idEnseignant, idSeance } }),
 
+  /**
+   * NEW: Cancel a teacher's wish and remove the associated assignment.
+   * 
+   * This endpoint:
+   * 1. Deletes the Voeu (wish) record from the database
+   * 2. Deletes the corresponding Affectation (assignment)
+   * 3. Decrements the nbSurveillantsInscrits counter on the Seance
+   * 
+   * @param {number} idEnseignant - The teacher's ID
+   * @param {number} idSeance - The session ID
+   * @returns {Promise} - Axios response with success/failure message
+   */
+  cancelVoeu: (idEnseignant, idSeance) =>
+    api.delete('/voeux', { params: { idEnseignant, idSeance } }),
+
   assignSurveillant: (idEnseignant, idSeance) =>
     api.post('/affectation', null, { params: { idEnseignant, idSeance } }),
 

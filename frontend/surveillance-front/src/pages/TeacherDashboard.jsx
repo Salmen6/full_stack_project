@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import ExamService from '../services/ExamService';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { Lock, Check, AlertTriangle, Clock, Users, BookOpen } from 'lucide-react';
+import { Lock, Check, AlertTriangle, Clock, Users, BookOpen, X } from 'lucide-react';
 
 // --- Helper Functions ---
 const fmtStart = (s) => s?.heureDebut || s?.heure_debut || '—';
@@ -100,12 +100,13 @@ const UserStatsCard = ({ user, teacherData }) => {
 
 // --- Main Component ---
 const TeacherDashboard = () => {
-  const { user, refreshUser } = useAuth(); // ADDED: refreshUser
+  const { user, refreshUser } = useAuth();
   const [seances, setSeances] = useState([]);
   const [teacherData, setTeacherData] = useState(null);
   const [message, setMessage] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [submittingWish, setSubmittingWish] = useState(null);
+  const [cancellingWish, setCancellingWish] = useState(null); // NEW: Track cancellation state
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -127,7 +128,6 @@ const TeacherDashboard = () => {
     }
   };
 
-  // UPDATED: handleWish function with refreshUser call
   const handleWish = async (idSeance) => {
     if (!teacherData) return;
 
@@ -140,8 +140,7 @@ const TeacherDashboard = () => {
       if (res.data.success) {
         setMessage({ type: 'success', text: res.data.message });
         
-        // CRITICAL FIX: Refresh user context to update stored teacher data
-        // This ensures FinalCalendar gets updated data when navigating
+        // Refresh user context to update stored teacher data
         await refreshUser();
         
         // Then reload local data
@@ -157,12 +156,51 @@ const TeacherDashboard = () => {
     }
   };
 
+  /**
+   * NEW: Handle wish cancellation
+   * 
+   * This function:
+   * 1. Calls the backend cancelVoeu endpoint
+   * 2. Refreshes the user context (updates AuthContext)
+   * 3. Reloads local data to update the UI
+   * 4. Shows success/error message
+   * 
+   * @param {number} idSeance - The session ID to cancel
+   */
+  const handleCancelWish = async (idSeance) => {
+    if (!teacherData) return;
+
+    setCancellingWish(idSeance);
+    setMessage(null);
+
+    try {
+      const res = await ExamService.cancelVoeu(teacherData.id, idSeance);
+
+      if (res.data.success) {
+        setMessage({ type: 'success', text: res.data.message });
+        
+        // CRITICAL: Refresh user context so FinalCalendar gets updated data
+        await refreshUser();
+        
+        // Reload local dashboard data
+        await loadData();
+      } else {
+        setMessage({ type: 'danger', text: res.data.message });
+      }
+    } catch (err) {
+      const errorMsg = err.response?.data?.message || 'Failed to cancel wish.';
+      setMessage({ type: 'danger', text: errorMsg });
+    } finally {
+      setCancellingWish(null);
+    }
+  };
+
   const getSessionStatus = (s) => {
     if (!teacherData) return { status: 'loading', label: 'Loading...', reason: '' };
 
     const alreadyAssigned = teacherData.affectations?.some(a => a.seance.id === s.id);
     if (alreadyAssigned) {
-      return { status: 'assigned', label: 'Already Assigned', reason: 'You are already assigned to this session' };
+      return { status: 'assigned', label: 'Assigned', reason: 'You are assigned to this session' };
     }
 
     if (ExamService.subjectConflict(teacherData, s)) {
@@ -251,6 +289,7 @@ const TeacherDashboard = () => {
   const SessionCard = ({ session }) => {
     const { status, label, reason } = getSessionStatus(session);
     const isSubmitting = submittingWish === session.id;
+    const isCancelling = cancellingWish === session.id; // NEW: Check if cancelling
 
     let cardClass = "mt-2 p-4 rounded-2xl border transition-all duration-300 relative group flex flex-col justify-between min-h-[140px] ";
     let btnClass = "mt-auto w-full py-2.5 px-3 rounded-xl text-xs font-bold uppercase tracking-wider text-center transition-all duration-300 border shadow-md hover:shadow-lg flex items-center justify-center gap-2 ";
@@ -259,9 +298,9 @@ const TeacherDashboard = () => {
 
     if (status === 'assigned') {
       cardClass += "bg-emerald-50 border-emerald-300 shadow-emerald-100";
-      btnClass += "bg-emerald-200 border-emerald-300 text-emerald-800 cursor-default";
+      btnClass += "bg-rose-500 hover:bg-rose-600 border-rose-400 text-white"; // NEW: Cancel button style
       textColor = "text-emerald-900";
-      Icon = Check;
+      Icon = X; // NEW: X icon for cancel
     } 
     else if (status === 'subject_conflict') {
       cardClass += "bg-red-50 border-red-400 shadow-red-100 opacity-90";
@@ -333,8 +372,16 @@ const TeacherDashboard = () => {
         </div>
 
         <button
-          onClick={() => status === 'open' && !isSubmitting && handleWish(session.id)}
-          disabled={status !== 'open' || isSubmitting}
+          onClick={() => {
+            if (status === 'assigned' && !isCancelling) {
+              // NEW: Cancel the wish
+              handleCancelWish(session.id);
+            } else if (status === 'open' && !isSubmitting) {
+              // Submit the wish
+              handleWish(session.id);
+            }
+          }}
+          disabled={(status !== 'open' && status !== 'assigned') || isSubmitting || isCancelling}
           className={btnClass}
         >
           {isSubmitting ? (
@@ -342,10 +389,15 @@ const TeacherDashboard = () => {
               <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
               Submitting...
             </>
+          ) : isCancelling ? (
+            <>
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
+              Cancelling...
+            </>
           ) : (
             <>
               {Icon && <Icon size={14} />}
-              {status === 'assigned' ? 'Assigned' :
+              {status === 'assigned' ? 'Cancel Wish' : // NEW: Show "Cancel Wish" for assigned sessions
                status === 'subject_conflict' ? 'Your Subject' :
                status === 'survey_conflict' ? 'Survey Conflict' :
                status === 'open' ? 'Submit Wish' :

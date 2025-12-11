@@ -3,6 +3,7 @@ package org.fsegs.surveillanceexams.repository;
 import org.fsegs.surveillanceexams.model.Affectation;
 import org.fsegs.surveillanceexams.model.Enseignant;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -42,4 +43,16 @@ public interface AffectationRepository extends JpaRepository<Affectation, Long> 
                                                 @Param("date") LocalDate date,
                                                 @Param("heureDebut") LocalTime heureDebut,
                                                 @Param("heureFin") LocalTime heureFin);
+    
+    /**
+     * NEW: Delete assignment by teacher and session.
+     * Used when cancelling a wish.
+     * 
+     * @param enseignant The teacher
+     * @param seance The session
+     */
+    @Modifying
+    @Query("DELETE FROM Affectation a WHERE a.enseignant = :enseignant AND a.seance = :seance")
+    void deleteByEnseignantAndSeance(@Param("enseignant") Enseignant enseignant,
+                                     @Param("seance") org.fsegs.surveillanceexams.model.Seance seance);
 }
