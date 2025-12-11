@@ -33,6 +33,40 @@ public class ExamController {
         return ResponseEntity.ok("Needs updated");
     }
 
+    /**
+     * NEW: Batch update all seances to recalculate surveillance needs.
+     * 
+     * This applies CONSTRAINT 2 to all sessions:
+     * nbSurveillantsNecessaires = sum of paquets * 1.5
+     * 
+     * Useful after database changes or initialization.
+     * 
+     * @return Success message with count of updated sessions
+     */
+    @PostMapping("/seances/calculate-all-needs")
+    public ResponseEntity<Map<String, Object>> calculateAllNeeds() {
+        List<Seance> allSeances = service.getAllSeances();
+        int updated = 0;
+        
+        for (Seance s : allSeances) {
+            try {
+                service.updateSeanceNeeds(s.getId());
+                updated++;
+            } catch (Exception e) {
+                // Continue with next seance even if one fails
+                System.err.println("Failed to update seance " + s.getId() + ": " + e.getMessage());
+            }
+        }
+        
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", true);
+        response.put("message", "Updated " + updated + " out of " + allSeances.size() + " sessions");
+        response.put("totalSeances", allSeances.size());
+        response.put("updatedSeances", updated);
+        
+        return ResponseEntity.ok(response);
+    }
+
     // =========================
     // ENSEIGNANTS
     // =========================
@@ -47,6 +81,93 @@ public class ExamController {
         return ResponseEntity.ok("Load updated");
     }
 
+    /**
+     * NEW: Batch update all teachers to recalculate surveillance loads.
+     * 
+     * This applies CONSTRAINT 1 to all teachers:
+     * chargeSurveillance = (chargeEnseignement * 1.5) - nbSessionsOfOwnSubjects
+     * 
+     * Useful after database changes or initialization.
+     * 
+     * @return Success message with count of updated teachers
+     */
+    @PostMapping("/enseignants/calculate-all-loads")
+    public ResponseEntity<Map<String, Object>> calculateAllLoads() {
+        List<Enseignant> allTeachers = service.getAllEnseignants();
+        int updated = 0;
+        
+        for (Enseignant e : allTeachers) {
+            try {
+                service.updateEnseignantLoad(e.getId());
+                updated++;
+            } catch (Exception ex) {
+                // Continue with next teacher even if one fails
+                System.err.println("Failed to update enseignant " + e.getId() + ": " + ex.getMessage());
+            }
+        }
+        
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", true);
+        response.put("message", "Updated " + updated + " out of " + allTeachers.size() + " teachers");
+        response.put("totalTeachers", allTeachers.size());
+        response.put("updatedTeachers", updated);
+        
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * NEW: Initialize entire system by recalculating both session needs and teacher loads.
+     * 
+     * This applies both constraints across the entire database:
+     * - CONSTRAINT 1: Teacher surveillance loads
+     * - CONSTRAINT 2: Session supervisor requirements
+     * 
+     * Should be called after data import or significant database changes.
+     * 
+     * @return Success message with details of all updates
+     */
+    @PostMapping("/system/initialize-constraints")
+    public ResponseEntity<Map<String, Object>> initializeConstraints() {
+        Map<String, Object> response = new HashMap<>();
+        
+        // Update all seances
+        List<Seance> allSeances = service.getAllSeances();
+        int seancesUpdated = 0;
+        for (Seance s : allSeances) {
+            try {
+                service.updateSeanceNeeds(s.getId());
+                seancesUpdated++;
+            } catch (Exception e) {
+                System.err.println("Failed to update seance " + s.getId() + ": " + e.getMessage());
+            }
+        }
+        
+        // Update all teachers
+        List<Enseignant> allTeachers = service.getAllEnseignants();
+        int teachersUpdated = 0;
+        for (Enseignant e : allTeachers) {
+            try {
+                service.updateEnseignantLoad(e.getId());
+                teachersUpdated++;
+            } catch (Exception ex) {
+                System.err.println("Failed to update enseignant " + e.getId() + ": " + ex.getMessage());
+            }
+        }
+        
+        response.put("success", true);
+        response.put("message", "System initialized: " + seancesUpdated + " sessions and " + teachersUpdated + " teachers updated");
+        response.put("seances", Map.of(
+            "total", allSeances.size(),
+            "updated", seancesUpdated
+        ));
+        response.put("teachers", Map.of(
+            "total", allTeachers.size(),
+            "updated", teachersUpdated
+        ));
+        
+        return ResponseEntity.ok(response);
+    }
+
     @GetMapping("/enseignants/by-user/{idUser}")
     public ResponseEntity<EnseignantDTO> getEnseignantByUser(@PathVariable Long idUser) {
         Enseignant e = service.getEnseignantByUserId(idUser);
@@ -56,7 +177,7 @@ public class ExamController {
     }
 
     // =========================
-    // VOEUX (WISHES) - Updated with detailed response
+    // VOEUX (WISHES)
     // =========================
     @PostMapping("/voeux")
     public ResponseEntity<Map<String, Object>> submitVoeu(
@@ -89,21 +210,6 @@ public class ExamController {
         return service.getAllVoeux();
     }
 
-    // =========================
-    // CANCEL WISH - NEW ENDPOINT
-    // =========================
-    /**
-     * NEW: Cancel a teacher's wish and remove the corresponding assignment.
-     * 
-     * This endpoint:
-     * 1. Deletes the Voeu (wish) record
-     * 2. Deletes the corresponding Affectation (assignment)
-     * 3. Decrements the nbSurveillantsInscrits counter on the Seance
-     * 
-     * @param idEnseignant The teacher's ID
-     * @param idSeance The session ID
-     * @return ResponseEntity with success/failure message
-     */
     @DeleteMapping("/voeux")
     public ResponseEntity<Map<String, Object>> cancelVoeu(
             @RequestParam Long idEnseignant,
@@ -157,7 +263,6 @@ public class ExamController {
         try {
             User user = service.login(request.getLogin(), request.getPassword());
 
-            // Fetch linked EnseignantDTO if user is a teacher
             EnseignantDTO enseignantDTO = null;
             if (user.getIdEnseignant() != null) {
                 Enseignant e = service.getEnseignantByUserId(user.getIdUser());

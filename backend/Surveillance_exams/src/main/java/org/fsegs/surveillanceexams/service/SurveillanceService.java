@@ -24,6 +24,7 @@ public class SurveillanceService {
     private final AffectationRepository affectationRepo;
     private final UserRepository userRepo;
     private final EpreuveRepository epreuveRepo;
+    private final PaquetRepository paquetRepo;
 
     // =========================
     // SEANCES
@@ -32,11 +33,29 @@ public class SurveillanceService {
         return seanceRepo.findAll();
     }
 
+    /**
+     * UPDATED: Calculate and update the required number of supervisors for a session.
+     * 
+     * CONSTRAINT 2 IMPLEMENTATION:
+     * Formula: nbSurveillantsNecessaires = sum of paquets of all subjects in session * 1.5
+     * 
+     * Steps:
+     * 1. Count all paquets across all epreuves in this session
+     * 2. Multiply by 1.5
+     * 3. Round up to nearest integer (using Math.ceil)
+     * 
+     * @param idSeance The session ID
+     */
     public void updateSeanceNeeds(Long idSeance) {
         Seance s = seanceRepo.findById(idSeance)
                 .orElseThrow(() -> new RuntimeException("Seance not found"));
 
-        int needed = s.getEpreuves().size() * 2; // Example logic
+        // Count total paquets for all epreuves in this session
+        long totalPaquets = paquetRepo.countPaquetsBySeanceId(idSeance);
+        
+        // Apply formula: paquets * 1.5, rounded up
+        int needed = (int) Math.ceil(totalPaquets * 1.5);
+        
         s.setNbSurveillantsNecessaires(needed);
         seanceRepo.save(s);
     }
@@ -54,6 +73,21 @@ public class SurveillanceService {
         return user.getEnseignant();
     }
 
+    /**
+     * UPDATED: Calculate and update the surveillance load for a teacher.
+     * 
+     * CONSTRAINT 1 IMPLEMENTATION:
+     * Formula: chargeSurveillance = (chargeEnseignement * 1.5) - nbSessionsOfOwnSubjects
+     * 
+     * Steps:
+     * 1. Get teacher's teaching load (chargeEnseignement)
+     * 2. Multiply by 1.5
+     * 3. Count sessions containing any of teacher's subjects
+     * 4. Subtract the session count
+     * 5. Ensure minimum of 0 (cannot be negative)
+     * 
+     * @param idEnseignant The teacher ID
+     */
     public void updateEnseignantLoad(Long idEnseignant) {
         Enseignant e = enseignantRepo.findById(idEnseignant)
                 .orElseThrow(() -> new RuntimeException("Enseignant not found"));
@@ -63,14 +97,29 @@ public class SurveillanceService {
         enseignantRepo.save(e);
     }
 
+    /**
+     * UPDATED: Calculate surveillance load according to CONSTRAINT 1.
+     * 
+     * Formula: (chargeEnseignement * 1.5) - number of sessions of teacher's subjects
+     * 
+     * @param e The teacher
+     * @return Calculated surveillance load (minimum 0)
+     */
     private double calculateSurveillanceLoad(Enseignant e) {
-        double baseLoad = e.getChargeEnseignement() / 10.0;
-
-        long sessionsInSubjects = e.getMatieres().stream()
+        // Step 1: Get base surveillance requirement (teaching load * 1.5)
+        double baseSurveillanceLoad = e.getChargeEnseignement() * 1.5;
+        
+        // Step 2: Count sessions containing any of this teacher's subjects
+        // A teacher teaches a subject, so they get "credit" (reduction) for sessions of that subject
+        long sessionsOfOwnSubjects = e.getMatieres().stream()
                 .mapToLong(m -> seanceRepo.countSeancesByMatiereId(m.getId()))
                 .sum();
-
-        return Math.max(3.0, baseLoad + (sessionsInSubjects * 0.1));
+        
+        // Step 3: Apply formula - subtract sessions of own subjects
+        double finalLoad = baseSurveillanceLoad - sessionsOfOwnSubjects;
+        
+        // Step 4: Ensure non-negative (cannot have negative surveillance requirement)
+        return Math.max(0.0, finalLoad);
     }
 
     // =========================
@@ -196,39 +245,19 @@ public class SurveillanceService {
         return "Wish submitted and assignment created successfully!";
     }
 
-    /**
-     * NEW: Cancel a teacher's wish and remove the associated assignment.
-     * 
-     * This method performs the following operations in a transaction:
-     * 1. Validates that both teacher and session exist
-     * 2. Checks if a wish exists for this teacher-session combination
-     * 3. Deletes the Voeu (wish) record from the database
-     * 4. Deletes the corresponding Affectation (assignment)
-     * 5. Decrements the nbSurveillantsInscrits counter on the Seance
-     * 
-     * @param idEnseignant The teacher's ID
-     * @param idSeance The session ID
-     * @return Success or error message
-     */
     @Transactional
     public String cancelVoeu(Long idEnseignant, Long idSeance) {
-        // Validate teacher exists
         Enseignant ens = enseignantRepo.findById(idEnseignant)
                 .orElseThrow(() -> new RuntimeException("Enseignant not found"));
         
-        // Validate session exists
         Seance seance = seanceRepo.findById(idSeance)
                 .orElseThrow(() -> new RuntimeException("Seance not found"));
 
-        // Check if wish exists
         if (!voeuRepo.existsByEnseignantAndSeance(ens, seance)) {
             return "No wish found for this session.";
         }
 
-        // Check if assignment exists
         if (!affectationRepo.existsByEnseignantAndSeance(ens, seance)) {
-            // Edge case: wish exists but no assignment (shouldn't happen in normal flow)
-            // Still delete the wish to maintain consistency
             voeuRepo.findByEnseignant(ens).stream()
                     .filter(v -> v.getSeance().getId().equals(idSeance))
                     .forEach(voeuRepo::delete);
@@ -236,15 +265,12 @@ public class SurveillanceService {
         }
 
         try {
-            // 1. Delete the Voeu (wish) record
             voeuRepo.findByEnseignant(ens).stream()
                     .filter(v -> v.getSeance().getId().equals(idSeance))
                     .forEach(voeuRepo::delete);
 
-            // 2. Delete the corresponding Affectation (assignment)
             affectationRepo.deleteByEnseignantAndSeance(ens, seance);
 
-            // 3. Decrement the supervisor count on the session
             int currentCount = seance.getNbSurveillantsInscrits();
             if (currentCount > 0) {
                 seance.setNbSurveillantsInscrits(currentCount - 1);
@@ -315,29 +341,15 @@ public class SurveillanceService {
                 .anyMatch(m -> teacherMatiereIds.contains(m.getId()));
     }
 
-    /**
-     * FIXED: Now properly checks for overlapping time intervals.
-     * 
-     * Returns true if the teacher has any existing assignment that overlaps
-     * with the given seance's time interval.
-     * 
-     * Two intervals overlap if: start1 < end2 AND start2 < end1
-     * 
-     * @param ens The teacher to check
-     * @param seance The new seance to check against
-     * @return true if there's a time conflict
-     */
     private boolean hasTimeConflict(Enseignant ens, Seance seance) {
         LocalDate date = seance.getDate();
         LocalTime heureDebut = seance.getHeureDebut();
         LocalTime heureFin = seance.getHeureFin();
 
-        // Validate that we have all required time information
         if (date == null || heureDebut == null || heureFin == null) {
             return false;
         }
 
-        // Use the updated repository method that checks for overlapping intervals
         return affectationRepo.existsByEnseignantAndSeanceDateTime(ens, date, heureDebut, heureFin);
     }
 
