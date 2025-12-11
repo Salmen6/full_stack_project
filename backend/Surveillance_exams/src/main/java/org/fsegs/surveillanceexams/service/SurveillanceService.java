@@ -196,6 +196,68 @@ public class SurveillanceService {
         return "Wish submitted and assignment created successfully!";
     }
 
+    /**
+     * NEW: Cancel a teacher's wish and remove the associated assignment.
+     * 
+     * This method performs the following operations in a transaction:
+     * 1. Validates that both teacher and session exist
+     * 2. Checks if a wish exists for this teacher-session combination
+     * 3. Deletes the Voeu (wish) record from the database
+     * 4. Deletes the corresponding Affectation (assignment)
+     * 5. Decrements the nbSurveillantsInscrits counter on the Seance
+     * 
+     * @param idEnseignant The teacher's ID
+     * @param idSeance The session ID
+     * @return Success or error message
+     */
+    @Transactional
+    public String cancelVoeu(Long idEnseignant, Long idSeance) {
+        // Validate teacher exists
+        Enseignant ens = enseignantRepo.findById(idEnseignant)
+                .orElseThrow(() -> new RuntimeException("Enseignant not found"));
+        
+        // Validate session exists
+        Seance seance = seanceRepo.findById(idSeance)
+                .orElseThrow(() -> new RuntimeException("Seance not found"));
+
+        // Check if wish exists
+        if (!voeuRepo.existsByEnseignantAndSeance(ens, seance)) {
+            return "No wish found for this session.";
+        }
+
+        // Check if assignment exists
+        if (!affectationRepo.existsByEnseignantAndSeance(ens, seance)) {
+            // Edge case: wish exists but no assignment (shouldn't happen in normal flow)
+            // Still delete the wish to maintain consistency
+            voeuRepo.findByEnseignant(ens).stream()
+                    .filter(v -> v.getSeance().getId().equals(idSeance))
+                    .forEach(voeuRepo::delete);
+            return "Wish cancelled (no assignment found).";
+        }
+
+        try {
+            // 1. Delete the Voeu (wish) record
+            voeuRepo.findByEnseignant(ens).stream()
+                    .filter(v -> v.getSeance().getId().equals(idSeance))
+                    .forEach(voeuRepo::delete);
+
+            // 2. Delete the corresponding Affectation (assignment)
+            affectationRepo.deleteByEnseignantAndSeance(ens, seance);
+
+            // 3. Decrement the supervisor count on the session
+            int currentCount = seance.getNbSurveillantsInscrits();
+            if (currentCount > 0) {
+                seance.setNbSurveillantsInscrits(currentCount - 1);
+                seanceRepo.save(seance);
+            }
+
+            return "Wish and assignment cancelled successfully!";
+            
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to cancel wish: " + e.getMessage());
+        }
+    }
+
     public List<Voeu> getAllVoeux() {
         return voeuRepo.findAll();
     }
